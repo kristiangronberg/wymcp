@@ -86,7 +86,7 @@ defmodule Wymcp.Context do
           assigns: map()
         }
 
-  @type content :: [map()]
+  @type content :: [%{required(String.t()) => binary()}, ...]
 
   @spec text(String.t()) :: content()
   def text(text) when is_binary(text) do
@@ -146,7 +146,7 @@ defmodule Wymcp.Context do
           "params" => params
         }
 
-        Wymcp.Session.push_event(ctx.session_pid, notification)
+        _ = Wymcp.Session.push_event(ctx.session_pid, notification)
         :ok
     end
   end
@@ -194,7 +194,7 @@ defmodule Wymcp.Context do
         "params" => params
       }
 
-      Wymcp.Session.push_event(pid, notification)
+      _ = Wymcp.Session.push_event(pid, notification)
       :ok
     else
       :ok

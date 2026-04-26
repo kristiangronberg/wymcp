@@ -26,11 +26,13 @@ defmodule Wymcp.Tool.Schema do
   See: `test/wymcp/tool/schema_test.exs`
   """
 
-  @spec build(map(), :full | :slim) :: map()
+  @type json_schema :: %{required(String.t()) => term()}
+
+  @spec build(map(), :full | :slim) :: json_schema()
   def build(actions, :slim), do: build_slim(actions)
   def build(actions, :full), do: build(actions)
 
-  @spec build(map()) :: map()
+  @spec build(map()) :: json_schema()
   def build(actions) when is_map(actions) do
     action_names =
       actions
@@ -61,7 +63,7 @@ defmodule Wymcp.Tool.Schema do
     }
   end
 
-  @spec build_slim(map()) :: map()
+  @spec build_slim(map()) :: json_schema()
   def build_slim(actions) when is_map(actions) do
     action_names =
       actions
@@ -98,7 +100,7 @@ defmodule Wymcp.Tool.Schema do
     }
   end
 
-  @spec build_variant(atom(), map()) :: map()
+  @spec build_variant(atom(), map()) :: json_schema()
   defp build_variant(action_name, schema) do
     action_str = Atom.to_string(action_name)
 

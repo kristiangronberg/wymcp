@@ -178,7 +178,7 @@ defmodule Wymcp.Methods.ToolsCall do
     }
   end
 
-  @spec filter_internal_assigns(map()) :: map()
+  @spec filter_internal_assigns(%{atom() => term()}) :: map()
   defp filter_internal_assigns(assigns) do
     Map.reject(assigns, fn {key, _value} ->
       key == :wymcp or (is_atom(key) and String.starts_with?(Atom.to_string(key), "wymcp_"))

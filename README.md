@@ -8,7 +8,7 @@ Based on [Vancouver](https://github.com/jameslong/vancouver) and inspired by
 [anubis-mcp](https://github.com/zoedsoupe/anubis-mcp).
 
 > ### API Changes {: .warning}
-> This project is very much a work in progress and the API will change until we reach version 1.0.0.
+> This project is a work in progress and the API will change until we reach version 1.0.0.
 
 <div data-toc />
 
@@ -21,7 +21,7 @@ In `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:wymcp, git: "git@github.com:kristiangronberg/wymcp.git", tag: "v0.1.0"}
+    {:wymcp, git: "git@github.com:kristiangronberg/wymcp.git", tag: "v0.1.1"}
   ]
 end
 ```
@@ -54,7 +54,7 @@ defmodule MyApp.Tools.Calculator do
   end
 
   @impl Wymcp.Tool
-  def run_action(:add, %{"a" => a, "b" => b}) do
+  def run_action(:add, %{"a" => a, "b" => b}, _context) do
     {:ok, %{result: a + b}}
   end
 end
@@ -78,7 +78,8 @@ Override `schema_mode/0` to use slim mode instead:
     end
 
 In slim mode, `tools/list` returns a compact schema with an action enum and
-one-line descriptions. The LLM discovers details progressively:
+one-line descriptions. The thought is that the LLM then can discover more details
+progressively during use:
 
 **help** — "what can I do?" / "what params does this need?"
 
@@ -120,9 +121,9 @@ When non-nil, the map appears under a `"context"` key in the response.
   References help for parameter details rather than duplicating. Think of it as
   the doc comment.
 
-In practice: if the information helps the LLM construct a valid call, it goes in
+In practice: if the information helps the LLM construct a valid call, pit it in
 `help`. If it helps the LLM make a better decision about *whether* or *how* to
-call, it goes in `describe` (via the `:notes` key in the action schema).
+call, put the information in `describe` (via the `:notes` key in the action schema).
 
 ### 2c. Hints (follow-up action suggestions)
 
@@ -131,7 +132,7 @@ Tools can suggest follow-up actions by returning a three-element tuple from
 result into the response:
 
     @impl Wymcp.Tool
-    def run_action(:create, %{"name" => name}) do
+    def run_action(:create, %{"name" => name}, _context) do
       task = MyApp.Tasks.create!(name)
       {:ok, %{message: "Created #{name}"}, %{id: task.id}}
     end
@@ -151,7 +152,7 @@ result into the response:
 Hints also work with error responses. Return `{:error, reason, hint_context}`
 to attach hints to an error:
 
-    def run_action(:delete, %{"id" => id}) do
+    def run_action(:delete, %{"id" => id}, _context) do
       case MyApp.Tasks.delete(id) do
         :ok -> {:ok, %{message: "Deleted"}}
         {:error, :not_found} -> {:error, :not_found, %{id: id}}
@@ -172,7 +173,7 @@ In `config.exs`:
 ```elixir
 config :wymcp,
   name: "My MCP Server",
-  version: "1.0.0"
+  version: Mix.Project.config()[:version] || "0.1.0"
 ```
 
 ### 4. Add route
@@ -181,7 +182,7 @@ In `router.ex`:
 
 ```elixir
 forward "/mcp", Wymcp.Router,
-  tools: [MyApp.Tools.CalculateSum]
+  tools: [MyApp.Tools.Calculator]
 ```
 
 ### 5. (Optional) Add authentication
@@ -208,7 +209,7 @@ Then pass it in the router:
 
 ```elixir
 forward "/mcp", Wymcp.Router,
-  tools: [MyApp.Tools.CalculateSum],
+  tools: [MyApp.Tools.Calculator],
   auth: MyApp.McpAuth
 ```
 
@@ -268,6 +269,19 @@ Return `{:error, reason, hint_context}` from `run_action/2` to attach hints to
 error responses — the framework calls `hints/2` and `action_context/1` on errors
 the same way it does on successes.
 
+[`Wymcp.Context`](lib/wymcp/context.ex) is the `%Context{}` struct passed as the
+third argument to every `run_action/3` callback. It carries the session
+reference, request metadata, and `assigns` — a merged map of per-request
+`conn.assigns` (set by upstream plugs like auth) and per-session state (set by
+previous tool calls or during initialization). Session assigns take precedence
+on key collisions so accumulated tool state is not overwritten by plug defaults.
+Internal wymcp keys are filtered out and not visible in `ctx.assigns`. The
+module also provides pure result builders — `text/1`, `json/1`, `image/2`,
+`audio/2` — that produce MCP-compliant content arrays for tools to return.
+Tools update session-persistent state by returning
+`{:ok, content, assigns_updates}`, where the map is merged into the session's
+assigns for future requests.
+
 [`Wymcp.Hint`](lib/wymcp/hint.ex) is the struct for follow-up action suggestions.
 Each hint represents a concrete next action the LLM can take, with a tool name,
 action name, description, and optional example payload. The struct validates
@@ -282,11 +296,43 @@ credentials from the `Authorization` header. When no `:auth` option is provided
 to the router, `Wymcp.Auth.Noop` is used as a pass-through. Authentication
 failures produce HTTP 401 with `WWW-Authenticate: Bearer` per the MCP spec.
 
+[`Wymcp.Server`](lib/wymcp/server.ex) is the optional behaviour for hooking into
+the MCP session lifecycle. Implement `init/2` to run logic when a session
+becomes ready (after the `notifications/initialized` handshake) and
+`terminate/2` for shutdown. Both callbacks have working defaults via
+`use Wymcp.Server`. There is deliberately no `handle_request/2` callback:
+per-request concerns like logging, rate limiting, and metrics belong in Plug
+middleware placed before `forward "/mcp", Wymcp.Router`, where they compose
+naturally with the rest of the host application's pipeline.
+
+[`Wymcp.Telemetry`](lib/wymcp/telemetry.ex) documents the `:telemetry` events
+emitted by Wymcp so consuming applications can attach handlers for monitoring,
+logging, and metrics. Events cover the session lifecycle
+(`[:wymcp, :session, :start | :expired]`) and tool execution
+(`[:wymcp, :tool, :start | :stop | :error]`) with measurements and metadata
+suitable for `:telemetry_metrics`.
+
+[`Wymcp.Session`](lib/wymcp/session.ex) is the GenServer that holds state for a
+single MCP session: the negotiated protocol version, client and server
+capabilities, server config, and per-session assigns. A session is created
+during the `initialize` handshake and lives until the client disconnects, sends
+DELETE, or the configurable idle timer expires (default 30 minutes). Each
+session is its own GenServer rather than an ETS row because sampling and
+elicitation require a coordination point between the SSE stream process and
+spawned tool tasks. Session IDs are 32-byte URL-safe base64 strings that
+satisfy the MCP requirement of visible ASCII characters only.
+
 [`Wymcp.JsonRpc`](lib/wymcp/json_rpc.ex) handles JSON-RPC 2.0 envelope
 construction and MCP protocol schema validation. It compiles the MCP JSON Schema
 (`priv/schema.json`, 2020-12 dialect) at build time using JSV, so incoming
 requests are validated against the official protocol definition without runtime
 schema parsing.
+
+[`Wymcp.Response`](lib/wymcp/response.ex) is the lowest-level output module in
+the pipeline. Every MCP response — successful tool result, JSON-RPC error, or
+auth rejection — flows through `send_json/2`, which preserves any
+previously-set HTTP status code and halts the connection so downstream plugs do
+not execute after a response is sent.
 
 [`Wymcp.Transport.StreamManager`](lib/wymcp/transport/stream_manager.ex) is the
 GenServer that owns the chunked SSE connection for a single MCP session. It runs
@@ -296,29 +342,18 @@ SSE events when the Session calls `push_event/2`. The StreamManager and Session
 monitor each other — if either crashes, the other cleans up. Only one active SSE
 stream per session is supported; a new GET replaces the previous stream.
 
+[`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) opens and manages the
+SSE response on a Plug connection. Wraps `Plug.Conn.send_chunked/2` with the
+SSE content-type headers and exposes helpers to push JSON-RPC messages as SSE
+events. Callers are responsible for scheduling keepalive comments via
+`push_keepalive/1` (e.g. every 15 seconds) to prevent proxy idle-disconnects.
+
+[`Wymcp.Transport.SSE`](lib/wymcp/transport/sse.ex) is pure SSE event encoding
+per the MCP Streamable HTTP transport specification. No process state, no side
+effects — just string formatting that turns a JSON-RPC message and optional
+event id into the `id: …\ndata: …\n\n` wire format.
+
 [`Wymcp.Testing`](lib/wymcp/testing.ex) provides test helpers for
 consuming applications. Functions like `text_response/1`, `json_response/1`, and
 `error_response/1` unwrap MCP response envelopes and assert on content type,
 removing boilerplate from tool tests.
-
-## Known issues
-
-### Claude.ai connectors break on server restart
-
-When the wymcp server restarts (deploy, crash, scaling event) while a Claude.ai
-Desktop connector has an active session, the connector can enter a corrupted
-state where it shows "This connector has no tools available." Attempting to
-disconnect produces "Invalid server ID format. Expected UUID or mcpsrv_* tagged
-ID."
-
-**Why it happens:** Wymcp sessions are in-memory GenServers. A server restart
-destroys all sessions. The MCP spec says clients receiving HTTP 404 for a stale
-session ID should re-initialize, but Claude.ai's connector does not recover
-automatically — it gets stuck in a limbo state.
-
-**Workaround:** Remove the connector from Claude.ai's config file, restart
-Claude.ai, re-add the connector, and restart again.
-
-**Scope:** This is a Claude.ai client-side issue, not a protocol violation.
-Wymcp correctly returns 404 for unknown session IDs per the MCP spec. Other MCP
-clients (Claude Code, etc.) handle server restarts without issue.

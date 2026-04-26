@@ -6,12 +6,25 @@ defmodule Wymcp.MixProject do
   def project do
     [
       app: :wymcp,
-      version: "0.1.0",
+      version: "0.1.1",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      aliases: aliases(),
       deps: deps(),
       description: "Model Context Protocol server library for Elixir with Plug integration",
       package: package(),
+      dialyzer: [
+        plt_add_apps: [:mix, :ex_unit],
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+        flags: [
+          :unmatched_returns,
+          :error_handling,
+          :underspecs
+        ],
+        ignore_warnings: ".dialyzer_ignore.exs",
+        list_unused_filters: true,
+        format: "dialyxir"
+      ],
       name: "Wymcp",
       source_url: @source_url,
       homepage_url: @source_url,
@@ -42,8 +55,15 @@ defmodule Wymcp.MixProject do
     ]
   end
 
+  defp aliases do
+    [
+      "dialyzer.watch": fn _args -> Mix.Task.run("dialyzer", []) end
+    ]
+  end
+
   defp deps do
     [
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:jsv, "~> 0.16"},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},

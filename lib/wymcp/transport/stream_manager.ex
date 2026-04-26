@@ -87,7 +87,14 @@ defmodule Wymcp.Transport.StreamManager do
 
   # -- Public API --
 
-  @spec start_link(map()) :: GenServer.on_start()
+  @type start_opts :: %{
+          required(:session_pid) => pid() | nil,
+          optional(:conn) => Plug.Conn.t(),
+          optional(:keepalive_interval) => pos_integer(),
+          optional(:last_event_id) => String.t() | nil
+        }
+
+  @spec start_link(start_opts()) :: GenServer.on_start()
   def start_link(%{session_pid: nil}), do: {:error, :no_session}
 
   def start_link(%{conn: conn, session_pid: session_pid} = opts) do
@@ -185,7 +192,7 @@ defmodule Wymcp.Transport.StreamManager do
 
   @impl GenServer
   def terminate(_reason, state) do
-    if state.keepalive_timer, do: Process.cancel_timer(state.keepalive_timer)
+    _ = if state.keepalive_timer, do: Process.cancel_timer(state.keepalive_timer)
     :ok
   end
 

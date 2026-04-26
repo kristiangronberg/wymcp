@@ -97,7 +97,8 @@ defmodule Wymcp.Methods.Initialize do
     |> maybe_put_icons(opts[:icons])
   end
 
-  @spec maybe_put(map(), String.t(), term()) :: map()
+  @spec maybe_put(%{required(String.t()) => term()}, String.t(), term()) ::
+          %{required(String.t()) => term()}
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 

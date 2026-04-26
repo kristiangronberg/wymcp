@@ -53,7 +53,7 @@ defmodule Wymcp.Testing do
     content |> unwrap_single() |> Map.fetch!("text")
   end
 
-  @spec unwrap_json([map()]) :: term()
+  @spec unwrap_json([map(), ...]) :: term()
   def unwrap_json(content) do
     content |> unwrap_text() |> JSON.decode!()
   end

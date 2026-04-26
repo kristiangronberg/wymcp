@@ -19,7 +19,14 @@ defmodule Wymcp.JsonRpc do
     }
   end
 
-  @spec error_response(atom(), term(), term()) :: map()
+  @type error_type ::
+          :parse_error
+          | :invalid_request
+          | :method_not_found
+          | :invalid_params
+          | :internal_error
+
+  @spec error_response(error_type(), term(), term()) :: %{required(String.t()) => term()}
   def error_response(error_type, request_id, data) when error_type in @error_types do
     {code, message} = Map.get(@error_type_map, error_type)
 

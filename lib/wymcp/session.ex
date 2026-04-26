@@ -333,7 +333,7 @@ defmodule Wymcp.Session do
   def terminate_session(session_id) do
     case lookup(session_id) do
       {:ok, pid} ->
-        DynamicSupervisor.terminate_child(Wymcp.Session.Supervisor, pid)
+        _ = DynamicSupervisor.terminate_child(Wymcp.Session.Supervisor, pid)
         :ok
 
       {:error, :not_found} ->
@@ -476,7 +476,7 @@ defmodule Wymcp.Session do
         {:noreply, state}
 
       {{from, timer_ref}, pending} ->
-        Process.cancel_timer(timer_ref)
+        _ = Process.cancel_timer(timer_ref)
         GenServer.reply(from, result_or_error)
         {:noreply, %{state | pending_server_requests: pending}}
     end
@@ -536,7 +536,7 @@ defmodule Wymcp.Session do
 
   @spec reset_idle_timeout(State.t()) :: State.t()
   defp reset_idle_timeout(state) do
-    if state.idle_timer_ref, do: Process.cancel_timer(state.idle_timer_ref)
+    _ = if state.idle_timer_ref, do: Process.cancel_timer(state.idle_timer_ref)
     %{state | idle_timer_ref: schedule_idle_timeout(state.idle_timeout)}
   end
 

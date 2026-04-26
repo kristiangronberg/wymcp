@@ -42,7 +42,7 @@ defmodule Wymcp.Methods.Initialized do
               "Server.init/2 rejected session #{state.session_id}: #{inspect(reason)}"
             )
 
-            Session.terminate_session(state.session_id)
+            _ = Session.terminate_session(state.session_id)
 
             request = conn.body_params
 

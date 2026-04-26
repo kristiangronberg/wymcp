@@ -197,19 +197,15 @@ defmodule Wymcp.Tool do
 
       @spec definition() :: map()
       def definition do
-        defn = %{
+        definition_data = %{
           "name" => name(),
           "description" => description(),
           "inputSchema" => input_schema()
         }
 
-        defn = Wymcp.Tool.maybe_put_title(defn, title())
-        defn = Wymcp.Tool.maybe_put_annotations(defn, annotations())
-
-        case output_schema() do
-          nil -> defn
-          schema when is_map(schema) -> Map.put(defn, "outputSchema", schema)
-        end
+        definition_data = Wymcp.Tool.maybe_put_title(definition_data, title())
+        definition_data = Wymcp.Tool.maybe_put_annotations(definition_data, annotations())
+        Wymcp.Tool.maybe_put_output_schema(definition_data, output_schema())
       end
     end
   end
@@ -358,17 +354,26 @@ defmodule Wymcp.Tool do
 
   @doc false
   @spec maybe_put_title(map(), String.t() | nil) :: map()
-  def maybe_put_title(defn, nil), do: defn
-  def maybe_put_title(defn, title) when is_binary(title), do: Map.put(defn, "title", title)
+  def maybe_put_title(definition_data, nil), do: definition_data
+
+  def maybe_put_title(definition_data, title) when is_binary(title),
+    do: Map.put(definition_data, "title", title)
 
   @doc false
   @spec maybe_put_annotations(map(), map() | nil) :: map()
-  def maybe_put_annotations(defn, nil), do: defn
+  def maybe_put_annotations(definition_data, nil), do: definition_data
 
-  def maybe_put_annotations(defn, %{} = ann) when map_size(ann) > 0,
-    do: Map.put(defn, "annotations", ann)
+  def maybe_put_annotations(definition_data, %{} = ann) when map_size(ann) > 0,
+    do: Map.put(definition_data, "annotations", ann)
 
-  def maybe_put_annotations(defn, _), do: defn
+  def maybe_put_annotations(definition_data, _), do: definition_data
+
+  @doc false
+  @spec maybe_put_output_schema(map(), map() | nil) :: map()
+  def maybe_put_output_schema(definition_data, nil), do: definition_data
+
+  def maybe_put_output_schema(definition_data, schema) when is_map(schema),
+    do: Map.put(definition_data, "outputSchema", schema)
 
   # -- Helpers --
 

@@ -11,6 +11,7 @@
 /doc/
 
 # Temporary files, for example, from tests.
+/priv/plts/
 /tmp/
 
 # If the VM crashes, it generates a dump, let's ignore it too.
@@ -25,5 +26,3 @@ wymcp-*.tar
 # Ignore some docs, iex.exs and CLAUDE.md for now
 /docs/implemented/
 /docs/plans/
-.iex.exs
-CLAUDE.md
