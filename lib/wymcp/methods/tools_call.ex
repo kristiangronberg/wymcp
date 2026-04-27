@@ -85,7 +85,10 @@ defmodule Wymcp.Methods.ToolsCall do
             error: Exception.message(e)
           })
 
-          Logger.error("Tool #{name} raised: #{Exception.message(e)}")
+          Logger.error("Tool #{name} raised: #{Exception.message(e)}",
+            crash_reason: {e, __STACKTRACE__}
+          )
+
           send_json(conn, JsonRpc.error_response(:internal_error, request["id"], %{}))
       end
     else
