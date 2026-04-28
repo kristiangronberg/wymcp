@@ -4,7 +4,7 @@ defmodule Wymcp.Methods.ToolsCall do
   require Logger
 
   import Wymcp.Response
-  alias Wymcp.{Context, JsonRpc, Session}
+  alias Wymcp.{Context, JsonRpc, ProtocolVersion, Session}
 
   @spec run(Plug.Conn.t(), [module()]) :: Plug.Conn.t()
   def run(%Plug.Conn{} = conn, compile_tools) do
@@ -99,9 +99,12 @@ defmodule Wymcp.Methods.ToolsCall do
 
   @spec send_tool_result(Plug.Conn.t(), map(), module(), list(), boolean()) :: Plug.Conn.t()
   defp send_tool_result(conn, request, tool, content, is_error) do
+    version = Session.negotiated_version(conn)
+
     result =
       %{"content" => content, "isError" => is_error}
       |> maybe_add_structured_content(tool, content, is_error)
+      |> ProtocolVersion.strip_tool_call_result(version)
       |> maybe_add_warning(conn)
 
     response = JsonRpc.success_response(request["id"], result)

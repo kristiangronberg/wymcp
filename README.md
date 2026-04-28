@@ -12,6 +12,26 @@ Based on [Vancouver](https://github.com/jameslong/vancouver) and inspired by
 
 <div data-toc />
 
+## Supported MCP protocol versions
+
+Wymcp accepts the three current revisions of the MCP specification.
+When a client requests an unknown version, wymcp counter-proposes
+its latest supported version per spec (`InitializeResult.protocolVersion`
+contains the counter-proposal; the client decides whether to disconnect).
+
+| Version       | Status                  | Notes                                                                                  |
+|---------------|-------------------------|----------------------------------------------------------------------------------------|
+| `2025-11-25`  | Supported (default)     | Latest. All implemented features available.                                            |
+| `2025-06-18`  | Supported               | All implemented features available.                                                    |
+| `2025-03-26`  | Supported (floor)       | Tool `title`, `outputSchema` / `structuredContent`, `serverInfo` extensions, elicitation, and the `MCP-Protocol-Version` header are version-gated and omitted on 2025-03-26 sessions. |
+| `2024-11-05`  | **Not supported**       | Predates Streamable HTTP and uses a split-endpoint HTTP+SSE transport that wymcp does not implement. Counter-proposed to `2025-11-25` during `initialize`. |
+
+The single source of truth for which versions are accepted and which
+features are gated by version is `Wymcp.ProtocolVersion`. The conn-aware
+resolver `Wymcp.Session.negotiated_version/1` is what `Methods.Initialize`,
+`Methods.ToolsList`, `Methods.ToolsCall`, and `Wymcp.Context.elicit/4`
+all consult.
+
 ## Getting started
 
 ### 1. Add dependency

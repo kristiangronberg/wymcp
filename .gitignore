@@ -25,4 +25,3 @@ wymcp-*.tar
 
 # Ignore some docs, iex.exs and CLAUDE.md for now
 /docs/implemented/
-/docs/plans/

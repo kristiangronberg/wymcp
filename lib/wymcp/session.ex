@@ -79,6 +79,8 @@ defmodule Wymcp.Session do
 
   use GenServer
 
+  alias Wymcp.ProtocolVersion
+
   @default_idle_timeout :timer.minutes(30)
 
   defmodule State do
@@ -189,6 +191,45 @@ defmodule Wymcp.Session do
   @spec protocol_version(pid()) :: String.t()
   def protocol_version(pid) do
     GenServer.call(pid, :protocol_version)
+  end
+
+  @doc """
+  Returns the protocol version that should drive serialization for the
+  current request.
+
+  Resolution order:
+
+  1. The session pid stored in `conn.assigns[:wymcp_session_pid]` (the
+     authoritative case — this is the version negotiated during the
+     `initialize` handshake and pinned on the session).
+  2. The `MCP-Protocol-Version` request header, when no session pid is
+     present (sessionless fallback — Claude Code drops the
+     `Mcp-Session-Id` header on `tools/call` but still sends the
+     protocol-version one). Only honoured when the header value is in
+     `Wymcp.ProtocolVersion.supported/0`.
+  3. `Wymcp.ProtocolVersion.latest/0` as a last resort.
+
+  This is the single resolver consulted by `Methods.Initialize`,
+  `Methods.ToolsList`, `Methods.ToolsCall`, and `Wymcp.Context.elicit/4`.
+  Adding a fourth call site? Use this function — do not re-derive.
+  """
+  @spec negotiated_version(Plug.Conn.t()) :: String.t()
+  def negotiated_version(%Plug.Conn{} = conn) do
+    case conn.assigns[:wymcp_session_pid] do
+      pid when is_pid(pid) ->
+        protocol_version(pid)
+
+      _ ->
+        case Plug.Conn.get_req_header(conn, "mcp-protocol-version") do
+          [version] ->
+            if ProtocolVersion.supported?(version),
+              do: version,
+              else: ProtocolVersion.latest()
+
+          _ ->
+            ProtocolVersion.latest()
+        end
+    end
   end
 
   @doc """

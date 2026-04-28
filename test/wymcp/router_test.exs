@@ -240,7 +240,39 @@ defmodule Wymcp.RouterTest do
       refute Map.has_key?(server_info_resp, "icons")
     end
 
-    test "returns error for unsupported protocol version" do
+    @tag doc: """
+         When the client requests a supported version, the server MUST
+         echo it back in InitializeResult.protocolVersion. Returning a
+         different (e.g. always-latest) value causes spec-strict clients
+         like Zed to bail out with "Unsupported protocol version".
+         """
+    test "echoes the client's requested version when supported" do
+      for requested <- ~w(2025-11-25 2025-06-18 2025-03-26) do
+        body = %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{
+            "protocolVersion" => requested,
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => "test", "version" => "1.0"}
+          }
+        }
+
+        conn = call_router(body)
+        resp = JSON.decode!(conn.resp_body)
+
+        assert resp["result"]["protocolVersion"] == requested,
+               "expected echo of #{requested}, got #{inspect(resp["result"]["protocolVersion"])}"
+      end
+    end
+
+    @tag doc: """
+         Per spec, when the client requests an unsupported version the
+         server MUST respond with one it supports — not a JSON-RPC
+         error. The client then decides whether to disconnect.
+         """
+    test "counter-proposes latest/0 when the requested version is unsupported" do
       body = %{
         "jsonrpc" => "2.0",
         "id" => 1,
@@ -255,8 +287,35 @@ defmodule Wymcp.RouterTest do
       conn = call_router(body)
       resp = JSON.decode!(conn.resp_body)
 
-      assert resp["error"]["code"] == -32602
-      assert resp["error"]["data"]["supported_versions"] == ["2025-11-25"]
+      assert resp["result"]["protocolVersion"] == Wymcp.ProtocolVersion.latest()
+      refute Map.has_key?(resp, "error")
+      assert [_session_id] = get_resp_header(conn, "mcp-session-id")
+    end
+
+    @tag doc: """
+         Per spec: when the server does not support the requested
+         version, it MUST respond with one it does — not a JSON-RPC
+         error. The session is created and pinned to the counter-proposed
+         version; the client decides whether to disconnect.
+         """
+    test "counter-proposes latest/0 for unsupported protocol version" do
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => "1999-01-01",
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "1.0"}
+        }
+      }
+
+      conn = call_router(body)
+      resp = JSON.decode!(conn.resp_body)
+
+      refute Map.has_key?(resp, "error")
+      assert resp["result"]["protocolVersion"] == Wymcp.ProtocolVersion.latest()
+      assert [_session_id] = get_resp_header(conn, "mcp-session-id")
     end
   end
 
@@ -598,7 +657,7 @@ defmodule Wymcp.RouterTest do
       assert resp["result"]["protocolVersion"] == "2025-11-25"
     end
 
-    test "rejects unsupported version with supported_versions list" do
+    test "counter-proposes latest/0 for an unsupported version" do
       body = %{
         "jsonrpc" => "2.0",
         "id" => 1,
@@ -613,8 +672,8 @@ defmodule Wymcp.RouterTest do
       conn = call_router(body)
       resp = JSON.decode!(conn.resp_body)
 
-      assert resp["error"]["code"] == -32602
-      assert resp["error"]["data"]["supported_versions"] == ["2025-11-25"]
+      refute Map.has_key?(resp, "error")
+      assert resp["result"]["protocolVersion"] == Wymcp.ProtocolVersion.latest()
     end
   end
 

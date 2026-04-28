@@ -291,7 +291,7 @@ defmodule Wymcp.Context do
     do: {:error, :no_session}
 
   def elicit(%__MODULE__{session_pid: pid}, message, schema, opts) do
-    with :ok <- check_capability(pid, "elicitation") do
+    with :ok <- check_elicitation_supported(pid) do
       request_id = generate_request_id()
 
       params = %{
@@ -319,6 +319,22 @@ defmodule Wymcp.Context do
       :ok
     else
       {:error, :not_supported}
+    end
+  end
+
+  @spec check_elicitation_supported(pid()) :: :ok | {:error, :not_supported}
+  defp check_elicitation_supported(pid) do
+    state = Wymcp.Session.get_state(pid)
+
+    cond do
+      not Wymcp.ProtocolVersion.supports_elicitation?(state.protocol_version) ->
+        {:error, :not_supported}
+
+      not Map.has_key?(state.client_capabilities, "elicitation") ->
+        {:error, :not_supported}
+
+      true ->
+        :ok
     end
   end
 

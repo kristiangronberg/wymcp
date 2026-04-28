@@ -3,10 +3,7 @@ defmodule Wymcp.Methods.Initialize do
 
   import Plug.Conn
   import Wymcp.Response
-  alias Wymcp.{JsonRpc, Session}
-
-  @supported_versions ["2025-11-25"]
-  @latest_version hd(@supported_versions)
+  alias Wymcp.{JsonRpc, ProtocolVersion, Session}
 
   @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
@@ -15,20 +12,17 @@ defmodule Wymcp.Methods.Initialize do
     wymcp_opts = conn.assigns[:wymcp] || []
     requested_version = params["protocolVersion"]
 
-    if requested_version in @supported_versions do
-      do_initialize(conn, request, params, wymcp_opts, requested_version)
-    else
-      data = %{
-        reason: "Unsupported protocol version: #{requested_version}",
-        supported_versions: @supported_versions
-      }
+    negotiated_version =
+      if ProtocolVersion.supported?(requested_version) do
+        requested_version
+      else
+        ProtocolVersion.latest()
+      end
 
-      response = JsonRpc.error_response(:invalid_params, request["id"], data)
-      send_json(conn, response)
-    end
+    do_initialize(conn, request, params, wymcp_opts, negotiated_version)
   end
 
-  defp do_initialize(conn, request, params, wymcp_opts, _requested_version) do
+  defp do_initialize(conn, request, params, wymcp_opts, negotiated_version) do
     name = Application.get_env(:wymcp, :name, "MCP Server")
     version = Application.get_env(:wymcp, :version, "1.0.0")
 
@@ -38,7 +32,7 @@ defmodule Wymcp.Methods.Initialize do
       Session.start_session(%{
         client_capabilities: params["capabilities"] || %{},
         client_info: client_info,
-        protocol_version: @latest_version,
+        protocol_version: negotiated_version,
         tools: wymcp_opts[:tools] || [],
         auth: wymcp_opts[:auth],
         server: wymcp_opts[:server]
@@ -63,11 +57,12 @@ defmodule Wymcp.Methods.Initialize do
         do: Map.put(capabilities, "elicitation", %{}),
         else: capabilities
 
-    server_info = build_server_info(name, version, wymcp_opts[:server_info])
+    server_info =
+      build_server_info(name, version, wymcp_opts[:server_info], negotiated_version)
 
     result = %{
       "capabilities" => capabilities,
-      "protocolVersion" => @latest_version,
+      "protocolVersion" => negotiated_version,
       "serverInfo" => server_info
     }
 
@@ -84,17 +79,19 @@ defmodule Wymcp.Methods.Initialize do
     |> send_json(response)
   end
 
-  @spec build_server_info(String.t(), String.t(), map() | nil) :: map()
-  defp build_server_info(name, version, nil) do
+  @spec build_server_info(String.t(), String.t(), map() | nil, String.t()) :: map()
+  defp build_server_info(name, version, nil, negotiated_version) do
     %{"name" => name, "version" => version}
+    |> ProtocolVersion.strip_server_info(negotiated_version)
   end
 
-  defp build_server_info(name, version, opts) when is_map(opts) do
+  defp build_server_info(name, version, opts, negotiated_version) when is_map(opts) do
     %{"name" => name, "version" => version}
     |> maybe_put("title", opts[:title])
     |> maybe_put("description", opts[:description])
     |> maybe_put("websiteUrl", opts[:website_url])
     |> maybe_put_icons(opts[:icons])
+    |> ProtocolVersion.strip_server_info(negotiated_version)
   end
 
   @spec maybe_put(%{required(String.t()) => term()}, String.t(), term()) ::

@@ -145,6 +145,15 @@ defmodule Wymcp.Plugs.Session do
   defp check_protocol_version(conn, pid) do
     expected = Session.protocol_version(pid)
 
+    if Wymcp.ProtocolVersion.supports_protocol_version_header?(expected) do
+      enforce_protocol_version_header(conn, expected)
+    else
+      conn
+    end
+  end
+
+  @spec enforce_protocol_version_header(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  defp enforce_protocol_version_header(conn, expected) do
     case get_req_header(conn, "mcp-protocol-version") do
       [^expected] ->
         conn

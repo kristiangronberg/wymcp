@@ -23,16 +23,21 @@ implements, to guide planning for the next development phase.
 
 ### 1.2 Lifecycle
 
-| Feature                                                            | Spec requirement | wymcp status                                                                |
-|--------------------------------------------------------------------|------------------|-----------------------------------------------------------------------------|
-| `initialize` — version + capability negotiation                    | MUST             | ✅ `Methods.Initialize` with dynamic capabilities                           |
-| `notifications/initialized`                                        | MUST             | ✅ `Methods.Initialized`                                                    |
-| Version negotiation (echo or counter-propose)                      | MUST             | ✅ Always responds with latest supported version                             |
-| `MCP-Protocol-Version` HTTP header on subsequent requests          | MUST (HTTP)      | ✅ `Plugs.Session` validates against negotiated version                     |
-| Store negotiated client capabilities for the session               | SHOULD           | ✅ Stored in `Session.State.client_capabilities`                            |
-| Capability negotiation for sampling/elicitation                    | SHOULD           | ✅ Server advertises only what client declares                              |
-| `serverInfo` fields: `title`, `description`, `icons`, `websiteUrl` | MAY              | ✅ Via `:server_info` router option                                         |
-| `instructions` field in init response                              | MAY              | ✅ Via `:instructions` router option                                        |
+| Feature                                                            | Spec requirement | wymcp status                                                                                                |
+|--------------------------------------------------------------------|------------------|-------------------------------------------------------------------------------------------------------------|
+| `initialize` — version + capability negotiation                    | MUST             | ✅ `Methods.Initialize` accepts `2025-03-26`, `2025-06-18`, `2025-11-25` (see `Wymcp.ProtocolVersion`)      |
+| `notifications/initialized`                                        | MUST             | ✅ `Methods.Initialized`                                                                                    |
+| Version negotiation (echo or counter-propose)                      | MUST             | ✅ Echoes the client's requested version when supported; counter-proposes `latest/0` for unknown versions   |
+| Negotiated version returned in `InitializeResult.protocolVersion`  | MUST             | ✅ Echoed (or counter-proposed) and pinned on the session                                                   |
+| `MCP-Protocol-Version` HTTP header on subsequent requests          | MUST (HTTP, ≥ 06-18) | ✅ `Plugs.Session` enforces equality on ≥ 06-18 sessions; skipped entirely on 03-26 sessions            |
+| Store negotiated client capabilities for the session               | SHOULD           | ✅ Stored in `Session.State.client_capabilities`                                                            |
+| Capability negotiation for sampling/elicitation                    | SHOULD           | ✅ Server advertises only what client declares; `Wymcp.Context.elicit/4` also gates on negotiated version   |
+| `serverInfo` fields: `title`, `description`, `icons`, `websiteUrl` | MAY              | ✅ Via `:server_info` router option *(included on ≥ 2025-06-18 sessions; stripped for 2025-03-26)*          |
+| `instructions` field in init response                              | MAY              | ✅ Via `:instructions` router option (in spec since 2025-03-26 floor — no gating)                           |
+
+> **Out of scope:** `2024-11-05`. That revision predates Streamable HTTP
+> and requires a split-endpoint HTTP+SSE transport that wymcp does not
+> implement. See `Wymcp.ProtocolVersion` for the supported set.
 
 ### 1.3 Transports
 
@@ -62,11 +67,11 @@ Reference: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 |--------------------------------------------------------|-----------------------------|------------------------------------------------------------|
 | `tools/list`                                           | MUST if capability declared | ✅ `Methods.ToolsList`                                     |
 | `tools/call`                                           | MUST if capability declared | ✅ `Methods.ToolsCall`                                     |
-| `outputSchema` + `structuredContent`                   | MAY                         | ✅ Tools define `output_schema/0`, validated on return     |
+| `outputSchema` + `structuredContent`                   | MAY                         | ✅ Tools define `output_schema/0`, validated on return *(emitted on ≥ 2025-06-18 sessions; stripped for 2025-03-26)* |
 | Runtime tool registration                              | N/A (wymcp extension)       | ✅ `Session.register_tool/2`, `unregister_tool/2`          |
 | Pagination (`cursor` / `nextCursor`)                   | SHOULD                      | ❌                                                         |
 | `listChanged` capability + notification                | MAY                         | ✅ Advertised in capabilities, sent on register/unregister |
-| Tool `title` field                                     | MAY                         | ✅ Optional callback, included in `definition()`           |
+| Tool `title` field                                     | MAY                         | ✅ Optional callback *(included on ≥ 2025-06-18 sessions; stripped for 2025-03-26)* |
 | Tool `icons` field (array: `src`, `mimeType`, `sizes`) | MAY                         | ❌                                                         |
 | Tool `annotations` (audience, priority, etc.)          | MAY                         | ✅ Optional callback, included in `definition()`           |
 | `audio` content type in results                        | MAY                         | ❌                                                         |

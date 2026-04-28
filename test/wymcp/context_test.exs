@@ -347,6 +347,33 @@ defmodule Wymcp.ContextTest do
     end
   end
 
+  describe "elicit/4 negotiated-version gate" do
+    @tag doc: """
+         elicitation/create was introduced in 2025-06-18. A session
+         pinned to 2025-03-26 must reject elicit calls with
+         :not_supported, even if the client wrongly declared the
+         capability — the method itself does not exist in that revision.
+         """
+    test "returns :not_supported when session is pinned to 2025-03-26" do
+      {:ok, _pid, session_id} =
+        Wymcp.Session.start_session(%{
+          client_capabilities: %{"elicitation" => %{}},
+          client_info: %{},
+          protocol_version: "2025-03-26",
+          tools: [],
+          auth: nil,
+          server: nil
+        })
+
+      {:ok, pid} = Wymcp.Session.lookup(session_id)
+
+      ctx = %Wymcp.Context{session_pid: pid, request_id: 1}
+
+      assert {:error, :not_supported} =
+               Wymcp.Context.elicit(ctx, "Pick one", %{"type" => "object"})
+    end
+  end
+
   @spec build_session_context(map()) :: {Context.t(), pid()}
   defp build_session_context(client_capabilities) do
     {:ok, session_pid, session_id} =

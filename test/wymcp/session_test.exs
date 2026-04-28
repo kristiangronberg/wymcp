@@ -632,6 +632,63 @@ defmodule Wymcp.SessionTest do
     end
   end
 
+  describe "negotiated_version/1" do
+    import Plug.Test
+    import Plug.Conn
+
+    test "returns the session's pinned version when a session pid is assigned" do
+      {:ok, _pid, session_id} =
+        Wymcp.Session.start_session(%{
+          client_capabilities: %{},
+          client_info: %{},
+          protocol_version: "2025-03-26",
+          tools: [],
+          auth: nil,
+          server: nil
+        })
+
+      {:ok, pid} = Wymcp.Session.lookup(session_id)
+
+      conn =
+        :post
+        |> conn("/", "")
+        |> assign(:wymcp_session_pid, pid)
+
+      assert Wymcp.Session.negotiated_version(conn) == "2025-03-26"
+    end
+
+    @tag doc: """
+         Sessionless fallback honours the MCP-Protocol-Version request
+         header when present and supported. Claude Code drops the
+         Mcp-Session-Id header on tools/call but still sends this one.
+         """
+    test "falls back to the request header when no session pid is present" do
+      conn =
+        :post
+        |> conn("/", "")
+        |> put_req_header("mcp-protocol-version", "2025-06-18")
+
+      assert Wymcp.Session.negotiated_version(conn) == "2025-06-18"
+    end
+
+    test "falls back to latest/0 when no session pid and no header" do
+      conn = conn(:post, "/", "")
+
+      assert Wymcp.Session.negotiated_version(conn) ==
+               Wymcp.ProtocolVersion.latest()
+    end
+
+    test "ignores an unsupported header value and falls back to latest/0" do
+      conn =
+        :post
+        |> conn("/", "")
+        |> put_req_header("mcp-protocol-version", "1999-01-01")
+
+      assert Wymcp.Session.negotiated_version(conn) ==
+               Wymcp.ProtocolVersion.latest()
+    end
+  end
+
   @spec start_ready_session() :: {:ok, pid(), String.t()}
   defp start_ready_session do
     {:ok, pid, id} =

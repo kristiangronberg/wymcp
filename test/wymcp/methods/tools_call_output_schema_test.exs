@@ -106,9 +106,9 @@ defmodule Wymcp.Methods.ToolsCallOutputSchemaTest do
     end
   end
 
-  describe "structuredContent in tools/call response" do
-    @router_opts Wymcp.Router.init(tools: [StructuredTool, PlainTool])
+  @router_opts Wymcp.Router.init(tools: [StructuredTool, PlainTool])
 
+  describe "structuredContent in tools/call response" do
     @tag doc: """
          When a tool with output_schema/0 returns {:ok, data}, the response
          must include both "content" (text serialization) and
@@ -133,6 +133,115 @@ defmodule Wymcp.Methods.ToolsCallOutputSchemaTest do
       assert result["content"] != nil
       refute Map.has_key?(result, "structuredContent")
     end
+
+    @tag doc: """
+         structuredContent is a 2025-06-18 field. For 2025-03-26
+         sessions it must be omitted, but the text content block
+         (which carries the same JSON as a stringified payload) must
+         remain so the client still has the data.
+         """
+    test "omits structuredContent for 2025-03-26 sessions but keeps text content" do
+      session_id = initialize_with_version("2025-03-26")
+
+      call_body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => "structured", "arguments" => %{"action" => "run"}}
+      }
+
+      conn = call_with_session(call_body, session_id)
+      resp = JSON.decode!(conn.resp_body)
+
+      refute Map.has_key?(resp["result"], "structuredContent")
+      assert [%{"type" => "text"} | _] = resp["result"]["content"]
+    end
+
+    test "includes structuredContent for 2025-06-18 and 2025-11-25 sessions" do
+      for version <- ~w(2025-06-18 2025-11-25) do
+        session_id = initialize_with_version(version)
+
+        call_body = %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/call",
+          "params" => %{"name" => "structured", "arguments" => %{"action" => "run"}}
+        }
+
+        conn = call_with_session(call_body, session_id)
+        resp = JSON.decode!(conn.resp_body)
+
+        assert Map.has_key?(resp["result"], "structuredContent"),
+               "expected structuredContent for #{version}"
+      end
+    end
+  end
+
+  describe "tools/list field gating by negotiated version" do
+    @tag doc: """
+         outputSchema was introduced in 2025-06-18. A 2025-03-26 client
+         does not know the field; sending it can cause strict clients
+         to reject the tool definition. The text-content fallback in
+         tools/call (the JSON-stringified payload) preserves all the
+         information for the client to consume.
+         """
+    test "omits outputSchema from tools/list when negotiated version is 2025-03-26" do
+      session_id = initialize_with_version("2025-03-26")
+
+      list_body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
+      conn = call_with_session(list_body, session_id)
+      resp = JSON.decode!(conn.resp_body)
+
+      [structured_def] = Enum.filter(resp["result"]["tools"], &(&1["name"] == "structured"))
+
+      refute Map.has_key?(structured_def, "outputSchema"),
+             "expected outputSchema to be stripped for 2025-03-26 session"
+    end
+
+    test "includes outputSchema for 2025-06-18 and 2025-11-25 sessions" do
+      for version <- ~w(2025-06-18 2025-11-25) do
+        session_id = initialize_with_version(version)
+
+        list_body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
+        conn = call_with_session(list_body, session_id)
+        resp = JSON.decode!(conn.resp_body)
+
+        [structured_def] = Enum.filter(resp["result"]["tools"], &(&1["name"] == "structured"))
+
+        assert Map.has_key?(structured_def, "outputSchema"),
+               "expected outputSchema for #{version} session"
+      end
+    end
+  end
+
+  defp initialize_with_version(version) do
+    body = %{
+      "jsonrpc" => "2.0",
+      "id" => 0,
+      "method" => "initialize",
+      "params" => %{
+        "protocolVersion" => version,
+        "capabilities" => %{},
+        "clientInfo" => %{"name" => "test", "version" => "1.0"}
+      }
+    }
+
+    conn =
+      :post
+      |> conn("/", JSON.encode!(body))
+      |> put_req_header("content-type", "application/json")
+      |> Wymcp.Router.call(@router_opts)
+
+    [session_id] = get_resp_header(conn, "mcp-session-id")
+    session_id
+  end
+
+  defp call_with_session(body, session_id) do
+    :post
+    |> conn("/", JSON.encode!(body))
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("mcp-session-id", session_id)
+    |> Wymcp.Router.call(@router_opts)
   end
 
   defp initialize(router_opts) do

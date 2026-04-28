@@ -2,13 +2,18 @@ defmodule Wymcp.Methods.ToolsList do
   @moduledoc false
 
   import Wymcp.Response
-  alias Wymcp.{JsonRpc, Session}
+  alias Wymcp.{JsonRpc, ProtocolVersion, Session}
 
   @spec run(Plug.Conn.t(), [module()]) :: Plug.Conn.t()
   def run(%Plug.Conn{} = conn, compile_tools) do
     request = conn.body_params
     tools = resolve_tools(conn, compile_tools)
-    tool_definitions = Enum.map(tools, & &1.definition())
+    version = Session.negotiated_version(conn)
+
+    tool_definitions =
+      tools
+      |> Enum.map(& &1.definition())
+      |> Enum.map(&ProtocolVersion.strip_tool_definition(&1, version))
 
     result =
       %{tools: tool_definitions}

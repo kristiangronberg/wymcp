@@ -334,4 +334,89 @@ defmodule Wymcp.Plugs.SessionTest do
     Session.mark_ready(pid)
     {:ok, pid, session_id}
   end
+
+  describe "MCP-Protocol-Version header (pre-2025-06-18 sessions)" do
+    @router_opts Wymcp.Router.init(tools: [])
+
+    @tag doc: """
+         Sessions negotiated to 2025-03-26 must not be 400'd for
+         omitting the MCP-Protocol-Version header. The header is a
+         2025-06-18 feature; older clients have no way to send it.
+         """
+    test "ping after init succeeds without the header for 2025-03-26 sessions" do
+      session_id = initialize_with_version("2025-03-26")
+
+      ping_body = %{"jsonrpc" => "2.0", "id" => 99, "method" => "ping"}
+
+      conn =
+        :post
+        |> conn("/", JSON.encode!(ping_body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> Wymcp.Router.call(@router_opts)
+
+      assert conn.status == 200
+      resp = JSON.decode!(conn.resp_body)
+      assert resp["result"] == %{}
+    end
+
+    @tag doc: """
+         For 2025-03-26 sessions, even an explicit (incorrect) header
+         must NOT trigger a mismatch error — the header is not part of
+         that revision's contract.
+         """
+    test "follow-up succeeds even with stale header for 2025-03-26 sessions" do
+      session_id = initialize_with_version("2025-03-26")
+
+      list_body = %{"jsonrpc" => "2.0", "id" => 99, "method" => "tools/list"}
+
+      conn =
+        :post
+        |> conn("/", JSON.encode!(list_body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> Wymcp.Router.call(@router_opts)
+
+      assert conn.status == 200
+    end
+
+    test "mismatched header still rejected on 2025-06-18 sessions" do
+      session_id = initialize_with_version("2025-06-18")
+
+      list_body = %{"jsonrpc" => "2.0", "id" => 99, "method" => "tools/list"}
+
+      conn =
+        :post
+        |> conn("/", JSON.encode!(list_body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-03-26")
+        |> Wymcp.Router.call(@router_opts)
+
+      assert conn.status == 400
+    end
+
+    defp initialize_with_version(version) do
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 0,
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => version,
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "1.0"}
+        }
+      }
+
+      conn =
+        :post
+        |> conn("/", JSON.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> Wymcp.Router.call(@router_opts)
+
+      [session_id] = get_resp_header(conn, "mcp-session-id")
+      session_id
+    end
+  end
 end
