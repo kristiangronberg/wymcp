@@ -54,7 +54,7 @@ defmodule Wymcp.Tool do
   - `{:error, reason}` — error; the framework calls `handle_error/1` and
     sends the result as an isError response
   - `{:error, reason, hint_context}` — error with hints; the framework calls
-    `handle_error/1`, `hints/2`, and `action_context/1`, then sends structured
+    `handle_error/1`, `hints/2`, and `action_context/2`, then sends structured
     JSON with `error`, `hints`, and optional `context` keys
 
   ## Optional callbacks
@@ -65,10 +65,14 @@ defmodule Wymcp.Tool do
   - `schema_mode/0` — returns `:full` (default) or `:slim`. Slim mode emits a
     compact `tools/list` schema with action names and one-liners instead of full
     `oneOf` variants.
-  - `action_context/1` — returns a map of runtime context for the given action,
-    or `nil`. Called during help (with topic), describe (with topic), and normal
-    action dispatch. The map appears under a `"context"` key in the response.
-    Default: `nil`
+  - `action_context/2` — returns a map of runtime context for the given
+    action, or `nil`. Receives `(action_atom, ctx)`, where `ctx` is the
+    same `Wymcp.Context.t()` passed to `run_action/3`. Called during
+    help (with topic), describe (with topic), and normal action
+    dispatch. The map appears under a `"context"` key in the response.
+    Read per-request data from `ctx.assigns` rather than the process
+    dictionary — `action_context` may be invoked from a process that
+    did not run the auth plug.
   - `output_schema/0` — returns a JSON Schema map describing the structure of
     the tool's response, or `nil`. When present, `tools/list` includes
     `"outputSchema"` in the definition and `tools/call` validates the response
@@ -96,7 +100,7 @@ defmodule Wymcp.Tool do
           R --> HN[Hint]
           A -->|"module.run_action/3"| CB(Consumer Tool)
           R -->|"module.hints/2"| CB
-          R -->|"module.action_context/1"| CB
+          R -->|"module.action_context/2"| CB
       end
   ```
 
@@ -130,7 +134,7 @@ defmodule Wymcp.Tool do
   @callback hints(action :: atom(), hint_context :: map()) :: [hint()]
   @callback handle_error(error :: term()) :: String.t()
   @callback schema_mode() :: :full | :slim
-  @callback action_context(action :: atom()) :: map() | nil
+  @callback action_context(action :: atom(), ctx :: Wymcp.Context.t()) :: map() | nil
   @callback title() :: String.t() | nil
   @callback annotations() :: map() | nil
   @callback output_schema() :: map() | nil
@@ -150,8 +154,8 @@ defmodule Wymcp.Tool do
       @spec schema_mode() :: :full | :slim
       def schema_mode, do: :full
 
-      @spec action_context(atom()) :: map() | nil
-      def action_context(_action), do: nil
+      @spec action_context(atom(), Wymcp.Context.t()) :: map() | nil
+      def action_context(_action, _ctx), do: nil
 
       @spec title() :: String.t() | nil
       def title, do: nil
@@ -165,7 +169,7 @@ defmodule Wymcp.Tool do
       defoverridable hints: 2,
                      handle_error: 1,
                      schema_mode: 0,
-                     action_context: 1,
+                     action_context: 2,
                      output_schema: 0,
                      title: 0,
                      annotations: 0
@@ -215,7 +219,7 @@ defmodule Wymcp.Tool do
   @doc false
   @spec dispatch(module(), Context.t(), String.t(), map() | nil) ::
           {:ok, Context.content()} | {:ok, Context.content(), map()} | {:error, String.t()}
-  def dispatch(module, _ctx, "help", data) do
+  def dispatch(module, ctx, "help", data) do
     actions = module.actions()
     data = data || %{}
 
@@ -226,14 +230,14 @@ defmodule Wymcp.Tool do
       topic ->
         with {:ok, action_atom, action, schema} <- fetch_action(actions, topic) do
           response = %{action: action, schema: slim_action_schema(schema)}
-          {:ok, Context.json(maybe_add_context(response, module, action_atom))}
+          {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
         else
           {:error, :unknown_action} -> {:error, "Unknown action: #{topic}"}
         end
     end
   end
 
-  def dispatch(module, _ctx, "describe", data) do
+  def dispatch(module, ctx, "describe", data) do
     actions = module.actions()
     data = data || %{}
 
@@ -255,7 +259,7 @@ defmodule Wymcp.Tool do
             ])
 
           response = %{action: action, schema: full}
-          {:ok, Context.json(maybe_add_context(response, module, action_atom))}
+          {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
         else
           {:error, :unknown_action} -> {:error, "Unknown action: #{topic}"}
         end
@@ -270,7 +274,7 @@ defmodule Wymcp.Tool do
          schema = Map.fetch!(actions, action),
          :ok <- check_required(data, schema, action_str),
          merged = apply_defaults(data, schema.defaults) do
-      handle_result(module, action, module.run_action(action, merged, ctx))
+      handle_result(module, action, ctx, module.run_action(action, merged, ctx))
     else
       {:error, :unknown_action} ->
         {:error, "Unknown action: #{action_str}"}
@@ -314,13 +318,13 @@ defmodule Wymcp.Tool do
   @spec apply_defaults(map(), map()) :: map()
   defp apply_defaults(data, defaults), do: Map.merge(defaults, data)
 
-  @spec handle_result(module(), atom(), tuple()) ::
+  @spec handle_result(module(), atom(), Wymcp.Context.t(), tuple()) ::
           {:ok, Context.content()} | {:ok, Context.content(), map()} | {:error, String.t()}
-  defp handle_result(module, action, {:ok, response}) do
-    {:ok, Context.json(maybe_add_context(response, module, action))}
+  defp handle_result(module, action, ctx, {:ok, response}) do
+    {:ok, Context.json(maybe_add_context(response, module, action, ctx))}
   end
 
-  defp handle_result(module, action, {:ok, response, hint_context}) do
+  defp handle_result(module, action, ctx, {:ok, response, hint_context}) do
     hints = module.hints(action, hint_context)
 
     response =
@@ -328,10 +332,10 @@ defmodule Wymcp.Tool do
         do: Map.put(response, :hints, hints),
         else: response
 
-    {:ok, Context.json(maybe_add_context(response, module, action))}
+    {:ok, Context.json(maybe_add_context(response, module, action, ctx))}
   end
 
-  defp handle_result(module, action, {:error, reason, hint_context}) do
+  defp handle_result(module, action, ctx, {:error, reason, hint_context}) do
     message = module.handle_error(reason)
     hints = module.hints(action, hint_context)
     error_data = %{error: message}
@@ -341,12 +345,12 @@ defmodule Wymcp.Tool do
         do: Map.put(error_data, :hints, hints),
         else: error_data
 
-    error_data = maybe_add_context(error_data, module, action)
+    error_data = maybe_add_context(error_data, module, action, ctx)
 
     {:error, JSON.encode!(error_data)}
   end
 
-  defp handle_result(module, _action, {:error, reason}) do
+  defp handle_result(module, _action, _ctx, {:error, reason}) do
     {:error, module.handle_error(reason)}
   end
 
@@ -409,9 +413,9 @@ defmodule Wymcp.Tool do
     ArgumentError -> {:error, :unknown_action}
   end
 
-  @spec maybe_add_context(map(), module(), atom()) :: map()
-  defp maybe_add_context(response, module, action) do
-    case module.action_context(action) do
+  @spec maybe_add_context(map(), module(), atom(), Wymcp.Context.t()) :: map()
+  defp maybe_add_context(response, module, action, ctx) do
+    case module.action_context(action, ctx) do
       nil -> response
       context when is_map(context) -> Map.put(response, :context, context)
     end

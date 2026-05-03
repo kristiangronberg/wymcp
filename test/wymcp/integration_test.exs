@@ -88,7 +88,7 @@ defmodule Wymcp.IntegrationTest do
     def hints(_action, _hint_context), do: []
     def handle_error(reason), do: "Error: #{inspect(reason)}"
     def schema_mode, do: :full
-    def action_context(_action), do: nil
+    def action_context(_action, _ctx), do: nil
     def output_schema, do: nil
 
     def input_schema, do: %{"type" => "object", "properties" => %{}}
@@ -427,7 +427,7 @@ defmodule Wymcp.IntegrationTest do
     def hints(_action, _hint_context), do: []
     def handle_error(reason), do: "Error: #{inspect(reason)}"
     def schema_mode, do: :full
-    def action_context(_action), do: nil
+    def action_context(_action, _ctx), do: nil
     def output_schema, do: nil
 
     def input_schema, do: %{"type" => "object", "properties" => %{}}

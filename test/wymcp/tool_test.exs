@@ -199,8 +199,26 @@ defmodule Wymcp.ToolTest do
     def run_action(:failing_with_context, _data, _ctx), do: {:error, :broken, %{}}
 
     @impl Wymcp.Tool
-    def action_context(:list), do: %{tip: "2 widgets need attention"}
-    def action_context(_action), do: nil
+    def action_context(:list, _ctx), do: %{tip: "2 widgets need attention"}
+    def action_context(_action, _ctx), do: nil
+  end
+
+  defmodule CtxAwareTool do
+    use Wymcp.Tool
+
+    def name, do: "ctx_aware"
+    def description, do: "Echoes the assign it sees in action_context"
+
+    def actions do
+      %{list: %{description: "List", properties: %{}, required: [], defaults: %{}}}
+    end
+
+    def run_action(:list, _data, _ctx), do: {:ok, %{ok: true}}
+
+    def action_context(:list, ctx),
+      do: %{seen_scope: ctx.assigns[:current_scope]}
+
+    def action_context(_action, _ctx), do: nil
   end
 
   defp build_ctx, do: %Context{session_pid: nil, session_id: "test", request_id: 1, assigns: %{}}
@@ -488,6 +506,30 @@ defmodule Wymcp.ToolTest do
 
       content = decode_json_content(result)
       refute Map.has_key?(content, "context")
+    end
+
+    @tag doc: """
+         Verifies that `action_context/2` receives the same `ctx` the tool's
+         `run_action/3` receives. Failure means the callback is being invoked
+         from a different process or with stale context — historically this
+         broke `Ymer.Mcp.Tools.Docs.action_context(:search)` because it had to
+         fall back to `Process.get(:mcp_current_scope)` and crashed with
+         `No MCP scope set` whenever the dispatch ran in a process that had
+         not been auth-plugged.
+         """
+    test "action_context/2 receives the dispatching ctx" do
+      ctx = %Wymcp.Context{
+        session_pid: nil,
+        session_id: "test",
+        request_id: 1,
+        meta: nil,
+        assigns: %{current_scope: :sentinel}
+      }
+
+      {:ok, content} = CtxAwareTool.run(ctx, %{"action" => "list", "data" => %{}})
+      body = content |> hd() |> Map.get("text") |> JSON.decode!()
+
+      assert body["context"]["seen_scope"] == "sentinel"
     end
   end
 

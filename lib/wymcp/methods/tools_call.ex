@@ -82,6 +82,9 @@ defmodule Wymcp.Methods.ToolsCall do
 
           Wymcp.Telemetry.emit(:tool, :error, %{duration: duration}, %{
             tool_name: name,
+            session_id: ctx.session_id,
+            request_id: request["id"],
+            exception: inspect(e.__struct__),
             error: Exception.message(e)
           })
 
@@ -89,7 +92,15 @@ defmodule Wymcp.Methods.ToolsCall do
             crash_reason: {e, __STACKTRACE__}
           )
 
-          send_json(conn, JsonRpc.error_response(:internal_error, request["id"], %{}))
+          diagnostic = %{
+            errorType: "tool_raised",
+            tool: name,
+            exception: inspect(e.__struct__),
+            message: Exception.message(e)
+          }
+
+          content = [%{"type" => "text", "text" => JSON.encode!(diagnostic)}]
+          send_tool_result(conn, request, tool, content, true)
       end
     else
       {:error, :not_found} -> tool_not_found(conn, request)

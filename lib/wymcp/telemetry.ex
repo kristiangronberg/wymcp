@@ -25,7 +25,19 @@ defmodule Wymcp.Telemetry do
 
   * `[:wymcp, :tool, :error]` — tool raised an exception
     - Measurements: `%{duration: integer()}`
-    - Metadata: `%{tool_name: String.t(), error: String.t()}`
+    - Metadata: `%{tool_name: String.t(), session_id: String.t() | nil,
+      request_id: term(), exception: String.t(), error: String.t()}`
+
+  * `[:wymcp, :auth, :reject]` — auth module returned `{:error, reason}`
+    - Measurements: `%{system_time: integer()}`
+    - Metadata: `%{auth_module: module(), reason: String.t(),
+      request_id: term(), method: String.t() | nil}`
+
+  * `[:wymcp, :auth, :error]` — auth module raised an exception
+    - Measurements: `%{system_time: integer()}`
+    - Metadata: `%{auth_module: module(), exception: String.t(),
+      error: String.t(), request_id: term(),
+      method: String.t() | nil}`
   """
 
   @spec emit(atom(), atom(), map(), map()) :: :ok
