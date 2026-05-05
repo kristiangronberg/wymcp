@@ -5,10 +5,14 @@ defmodule Wymcp.Methods.CancelledTest do
   Tests for the Wymcp.Methods.Cancelled handler.
 
   Cancelled handles `notifications/cancelled` — a client notification that
-  a previously-issued request should be abandoned. If a session is present,
-  the handler calls `Session.complete_request/2` to clean up the pending
-  request tracker. It always returns an empty JSON response (notifications
-  don't expect a meaningful reply).
+  a previously-issued request should be abandoned. The handler calls
+  `Session.complete_request/2` to clean up the pending request tracker.
+  It always returns an empty JSON response (notifications don't expect a
+  meaningful reply).
+
+  `notifications/cancelled` is not session-exempt, so `Plugs.Session`
+  ensures the session pid is always assigned by the time this handler
+  runs.
   """
 
   import Plug.Test
@@ -31,24 +35,21 @@ defmodule Wymcp.Methods.CancelledTest do
     {pid, session_id}
   end
 
-  defp build_conn(params, session_pid \\ nil) do
+  defp build_conn(params, session_pid) do
     body = %{
       "jsonrpc" => "2.0",
       "method" => "notifications/cancelled",
       "params" => params
     }
 
-    conn = conn(:post, "/") |> Map.put(:body_params, body)
-
-    if session_pid do
-      assign(conn, :wymcp_session_pid, session_pid)
-    else
-      conn
-    end
+    conn(:post, "/")
+    |> Map.put(:body_params, body)
+    |> assign(:wymcp_session_pid, session_pid)
   end
 
   test "returns empty JSON response" do
-    conn = build_conn(%{"requestId" => 1, "reason" => "user abort"})
+    {pid, _id} = start_session()
+    conn = build_conn(%{"requestId" => 1, "reason" => "user abort"}, pid)
     result = Cancelled.run(conn)
     body = JSON.decode!(result.resp_body)
 
@@ -56,7 +57,8 @@ defmodule Wymcp.Methods.CancelledTest do
   end
 
   test "halts the connection" do
-    conn = build_conn(%{"requestId" => 1})
+    {pid, _id} = start_session()
+    conn = build_conn(%{"requestId" => 1}, pid)
     result = Cancelled.run(conn)
 
     assert result.halted
@@ -93,14 +95,6 @@ defmodule Wymcp.Methods.CancelledTest do
   test "handles missing requestId without crashing" do
     {pid, _id} = start_session()
     conn = build_conn(%{"reason" => "no request id"}, pid)
-    result = Cancelled.run(conn)
-    body = JSON.decode!(result.resp_body)
-
-    assert body == %{}
-  end
-
-  test "handles nil session_pid (sessionless mode)" do
-    conn = build_conn(%{"requestId" => 1, "reason" => "cancelled"})
     result = Cancelled.run(conn)
     body = JSON.decode!(result.resp_body)
 

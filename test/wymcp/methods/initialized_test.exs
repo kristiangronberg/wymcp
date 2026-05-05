@@ -11,14 +11,27 @@ defmodule Wymcp.Methods.InitializedTest do
   """
 
   import Plug.Test
+  import Plug.Conn
+
+  alias Wymcp.Session
 
   test "returns empty response for initialized notification" do
+    {:ok, pid, _session_id} =
+      Session.start_session(%{
+        client_capabilities: %{},
+        client_info: %{"name" => "test", "version" => "1.0"},
+        protocol_version: "2025-11-25",
+        tools: [],
+        auth: nil
+      })
+
     conn =
       conn(:post, "/")
       |> Map.put(:body_params, %{
         "jsonrpc" => "2.0",
         "method" => "notifications/initialized"
       })
+      |> assign(:wymcp_session_pid, pid)
 
     result = Wymcp.Methods.Initialized.run(conn)
     body = JSON.decode!(result.resp_body)

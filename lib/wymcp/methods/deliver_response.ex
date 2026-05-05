@@ -16,9 +16,7 @@ defmodule Wymcp.Methods.DeliverResponse do
         Map.has_key?(body, "error") -> {:error, body["error"]}
       end
 
-    if session_pid do
-      Session.deliver_response(session_pid, request_id, result_or_error)
-    end
+    Session.deliver_response(session_pid, request_id, result_or_error)
 
     conn
     |> send_resp(202, "")

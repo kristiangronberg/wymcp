@@ -13,7 +13,7 @@ defmodule Wymcp.Methods.Cancelled do
     reason = params["reason"] || "cancelled"
     session_pid = conn.assigns[:wymcp_session_pid]
 
-    if session_pid && request_id do
+    if request_id do
       Session.complete_request(session_pid, request_id)
       Logger.info("Request #{request_id} cancelled: #{reason}")
     end

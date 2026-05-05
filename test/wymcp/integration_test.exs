@@ -229,10 +229,13 @@ defmodule Wymcp.IntegrationTest do
         headers
       )
 
-    # Session was terminated — request falls through sessionless with compile-time tools
-    assert gone_conn.status == 200
+    # Session was terminated — per MCP 2025-11-25 spec the server MUST
+    # respond with HTTP 404 and the client MUST start a new session.
+    assert gone_conn.status == 404
     gone_body = JSON.decode!(gone_conn.resp_body)
-    assert is_list(gone_body["result"]["tools"])
+    assert gone_body["id"] == 5
+    assert gone_body["error"]["code"] == -32001
+    assert gone_body["error"]["message"] == "Session terminated"
   end
 
   describe "server init/2 callback" do

@@ -9,13 +9,8 @@ defmodule Wymcp.Methods.Initialized do
   @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
     session_pid = conn.assigns[:wymcp_session_pid]
-
-    if session_pid do
-      Session.mark_ready(session_pid)
-      invoke_server_init(conn, session_pid)
-    else
-      send_json(conn, %{})
-    end
+    Session.mark_ready(session_pid)
+    invoke_server_init(conn, session_pid)
   end
 
   @spec invoke_server_init(Plug.Conn.t(), pid()) :: Plug.Conn.t()

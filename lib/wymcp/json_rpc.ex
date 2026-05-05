@@ -6,7 +6,8 @@ defmodule Wymcp.JsonRpc do
     invalid_request: {-32600, "Invalid Request"},
     method_not_found: {-32601, "Method not found"},
     invalid_params: {-32602, "Invalid params"},
-    internal_error: {-32603, "Internal error"}
+    internal_error: {-32603, "Internal error"},
+    session_not_found: {-32001, "Session terminated"}
   }
   @error_types Map.keys(@error_type_map)
 
@@ -25,6 +26,21 @@ defmodule Wymcp.JsonRpc do
           | :method_not_found
           | :invalid_params
           | :internal_error
+          | :session_not_found
+
+  @spec error_response(error_type(), term()) :: %{required(String.t()) => term()}
+  def error_response(error_type, request_id) when error_type in @error_types do
+    {code, message} = Map.get(@error_type_map, error_type)
+
+    %{
+      "jsonrpc" => "2.0",
+      "id" => request_id,
+      "error" => %{
+        "code" => code,
+        "message" => message
+      }
+    }
+  end
 
   @spec error_response(error_type(), term(), term()) :: %{required(String.t()) => term()}
   def error_response(error_type, request_id, data) when error_type in @error_types do

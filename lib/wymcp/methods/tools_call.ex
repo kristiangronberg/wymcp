@@ -37,11 +37,8 @@ defmodule Wymcp.Methods.ToolsCall do
   end
 
   @spec resolve_tools(Plug.Conn.t(), [module()]) :: [module()]
-  defp resolve_tools(conn, compile_tools) do
-    case conn.assigns[:wymcp_session_pid] do
-      nil -> compile_tools
-      pid -> Session.get_tools(pid)
-    end
+  defp resolve_tools(conn, _compile_tools) do
+    Session.get_tools(conn.assigns[:wymcp_session_pid])
   end
 
   defp execute_tool(conn, tools, name, arguments) do
@@ -116,18 +113,9 @@ defmodule Wymcp.Methods.ToolsCall do
       %{"content" => content, "isError" => is_error}
       |> maybe_add_structured_content(tool, content, is_error)
       |> ProtocolVersion.strip_tool_call_result(version)
-      |> maybe_add_warning(conn)
 
     response = JsonRpc.success_response(request["id"], result)
     send_json(conn, response)
-  end
-
-  @spec maybe_add_warning(map(), Plug.Conn.t()) :: map()
-  defp maybe_add_warning(result, conn) do
-    case conn.assigns[:wymcp_session_warning] do
-      nil -> result
-      warning -> put_in(result, ["_meta"], %{"warnings" => [warning]})
-    end
   end
 
   @spec maybe_add_structured_content(map(), module(), list(), boolean()) :: map()
@@ -172,13 +160,7 @@ defmodule Wymcp.Methods.ToolsCall do
     request = conn.body_params
     meta = get_in(request, ["params", "_meta"])
     session_pid = conn.assigns[:wymcp_session_pid]
-
-    session_assigns =
-      if session_pid && Process.alive?(session_pid) do
-        Session.get_state(session_pid).assigns
-      else
-        %{}
-      end
+    session_assigns = Session.get_state(session_pid).assigns
 
     # Merge conn.assigns (per-request, from plugs like auth) as the base layer,
     # with session assigns taking precedence (accumulated tool state).
@@ -205,11 +187,7 @@ defmodule Wymcp.Methods.ToolsCall do
   @spec persist_assigns(Plug.Conn.t(), map()) :: :ok
   defp persist_assigns(conn, assigns_updates) do
     session_pid = conn.assigns[:wymcp_session_pid]
-
-    if session_pid && Process.alive?(session_pid) do
-      Session.put_assigns(session_pid, assigns_updates)
-    end
-
+    Session.put_assigns(session_pid, assigns_updates)
     :ok
   end
 

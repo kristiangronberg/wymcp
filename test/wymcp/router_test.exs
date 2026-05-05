@@ -734,11 +734,16 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-         Stale session IDs fall through to sessionless mode instead of
-         returning 404. This prevents Claude Desktop from breaking when
-         sessions expire. The response succeeds using compile-time tools.
+         End-to-end proof that an unknown Mcp-Session-Id on tools/list
+         is rejected with the spec-mandated 404 + JSON-RPC -32001 in
+         the SDK-exact wire shape (no data field).
+         A failure here means either Plugs.Session.session_terminated/2
+         no longer halts, or the JsonRpc atom registry was reverted, or
+         the 2-arity `error_response/2` was lost.
+         The id field is preserved so the client can correlate the
+         response with its request.
          """
-    test "stale session ID falls through to sessionless mode" do
+    test "tools/list with unknown session ID returns 404 + -32001" do
       body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
 
       router_opts = [tools: [TestTool]]
@@ -750,31 +755,15 @@ defmodule Wymcp.RouterTest do
         |> put_req_header("mcp-session-id", "bogus")
         |> Wymcp.Router.call(init_opts)
 
-      assert conn.status == 200
+      assert conn.status == 404
       resp = JSON.decode!(conn.resp_body)
-      assert is_list(resp["result"]["tools"])
+      assert resp["id"] == 1
+      assert resp["error"]["code"] == -32001
+      assert resp["error"]["message"] == "Session terminated"
+      refute Map.has_key?(resp["error"], "data")
     end
 
-    test "stale session includes warning in tools/list response" do
-      body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
-
-      router_opts = [tools: [TestTool]]
-      init_opts = Wymcp.Router.init(router_opts)
-
-      conn =
-        conn(:post, "/", JSON.encode!(body))
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", "expired-session")
-        |> Wymcp.Router.call(init_opts)
-
-      assert conn.status == 200
-      resp = JSON.decode!(conn.resp_body)
-      assert is_list(resp["result"]["tools"])
-      assert [warning] = resp["result"]["_meta"]["warnings"]
-      assert warning =~ "Session not found"
-    end
-
-    test "stale session ID allows tools/call in sessionless mode" do
+    test "tools/call with unknown session ID returns 404 + -32001" do
       body = %{
         "jsonrpc" => "2.0",
         "id" => 1,
@@ -794,35 +783,12 @@ defmodule Wymcp.RouterTest do
         |> put_req_header("mcp-session-id", "stale-id")
         |> Wymcp.Router.call(init_opts)
 
-      assert conn.status == 200
+      assert conn.status == 404
       resp = JSON.decode!(conn.resp_body)
-      assert resp["result"]["content"]
-    end
-
-    test "stale session includes warning in tools/call response" do
-      body = %{
-        "jsonrpc" => "2.0",
-        "id" => 1,
-        "method" => "tools/call",
-        "params" => %{
-          "name" => "test_tool",
-          "arguments" => %{"action" => "ping"}
-        }
-      }
-
-      router_opts = [tools: [TestTool]]
-      init_opts = Wymcp.Router.init(router_opts)
-
-      conn =
-        conn(:post, "/", JSON.encode!(body))
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", "expired-session")
-        |> Wymcp.Router.call(init_opts)
-
-      assert conn.status == 200
-      resp = JSON.decode!(conn.resp_body)
-      assert [warning] = resp["result"]["_meta"]["warnings"]
-      assert warning =~ "Session not found"
+      assert resp["id"] == 1
+      assert resp["error"]["code"] == -32001
+      assert resp["error"]["message"] == "Session terminated"
+      refute Map.has_key?(resp["error"], "data")
     end
   end
 

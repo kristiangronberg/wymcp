@@ -1,5 +1,92 @@
 defmodule Wymcp.Plugs.Session do
-  @moduledoc false
+  @moduledoc """
+  Resolves the MCP session for an incoming request and enforces the
+  spec-mandated lifecycle.
+
+  Three outcomes per request:
+
+    * **Session header present and registered** — assigns
+      `:wymcp_session_pid` and `:wymcp_session_id`, calls `Session.touch/1`,
+      and validates the `MCP-Protocol-Version` header against the
+      version pinned at `initialize` time. Downstream methods read
+      tools from the session pid, not from compile-time options.
+
+    * **Session header missing on a non-exempt method** — rejects
+      with HTTP 400 + JSON-RPC -32600 (`invalid_request`). Per the
+      MCP 2025-11-25 spec: "Servers that require a session ID SHOULD
+      respond to requests without an `MCP-Session-Id` header with
+      HTTP 400 Bad Request."
+
+    * **Session header present but not registered** — rejects with
+      HTTP 404. Per the MCP 2025-11-25 spec, Streamable HTTP / Session
+      Management clauses 3 and 4: a server MAY terminate a session at
+      any time and MUST then respond to requests carrying that ID
+      with 404; the client MUST issue a fresh `InitializeRequest`. A
+      server-restart-wiped in-memory registry is an instance of
+      clause 3 — the spec does not distinguish "I never saw this ID"
+      from "I terminated this ID".
+
+  ### Flow
+
+  ```mermaid
+  flowchart TD
+      A[Incoming POST] --> B{Mcp-Session-Id<br/>required?}
+      B -->|"no — initialize / ping"| Pass([pass through<br/>to next plug])
+      B -->|yes| C{Header present?}
+      C -->|no| R400([HTTP 400<br/>JSON-RPC -32600<br/>invalid_request])
+      C -->|yes| D{Session.lookup}
+      D -->|"{:ok, pid}"| E[assign pid<br/>+ touch<br/>+ check version<br/>+ lifecycle gate] --> Pass
+      D -->|":not_found"| F{Message kind?}
+      F -->|"request<br/>(has id)"| R404Body([HTTP 404<br/>JSON-RPC -32001<br/>'Session terminated'<br/>no data field])
+      F -->|notification or<br/>response message| R404Empty([HTTP 404<br/>empty body])
+  ```
+
+  ### Exemptions
+
+    * `initialize` and `ping` skip session lookup entirely
+      (`@session_exempt_methods`).
+    * `tools/list`, `tools/call`, `notifications/initialized`, and the
+      two exempt methods above also skip the lifecycle gate
+      (`@lifecycle_exempt_methods`) — they are allowed to run while a
+      session is still in `:initializing`. This is necessary because
+      clients (notably `mcp-remote`) send `tools/list` and
+      `tools/call` concurrently with `notifications/initialized`.
+
+  ### Wire shape for session-not-found
+
+  The 404 body branches on JSON-RPC message kind, since JSON-RPC 2.0
+  forbids responding to notifications and to responses:
+
+    * **Request** (`id` present, `wymcp_message_type` not `:response`)
+      — body is `{"jsonrpc":"2.0","id":<request-id>,"error":{"code":
+      -32001,"message":"Session terminated"}}`, matching the
+      TypeScript SDK exactly: see
+      `modelcontextprotocol/typescript-sdk`,
+      `packages/server/src/server/streamableHttp.ts`, where the SDK
+      throws `new McpError(-32001, "Session terminated")` with no
+      `data` field. Matching that wire shape exactly maximises the
+      chance compliant clients (which MUST re-initialise on this
+      response) recognise it.
+
+    * **Notification** (no `id`) — HTTP 404 with empty body. JSON-RPC
+      2.0 forbids responding to notifications, so we do not emit an
+      envelope. The 404 status alone carries the spec-required
+      signal.
+
+    * **Response message** (`wymcp_message_type == :response`) — HTTP
+      404 with empty body. A JSON-RPC response carries an `id` of a
+      server-initiated request the server already sent; replying to
+      it with a JSON-RPC error would itself be a protocol violation.
+
+  ## Related Modules
+
+  See: `Wymcp.Session`, `Wymcp.JsonRpc`, `Wymcp.ProtocolVersion`,
+  `Wymcp.Plugs.Pipeline`.
+
+  ## Tests
+
+  See: `test/wymcp/plugs/session_test.exs`.
+  """
 
   import Plug.Conn
   import Wymcp.Response
@@ -56,7 +143,7 @@ defmodule Wymcp.Plugs.Session do
             |> check_protocol_version(pid)
 
           {:error, :not_found} ->
-            session_fallthrough(conn)
+            session_terminated(conn, session_id)
         end
 
       [] ->
@@ -81,7 +168,7 @@ defmodule Wymcp.Plugs.Session do
             |> check_lifecycle_gate(pid, method)
 
           {:error, :not_found} ->
-            session_fallthrough(conn)
+            session_terminated(conn, session_id)
         end
 
       [] ->
@@ -115,19 +202,34 @@ defmodule Wymcp.Plugs.Session do
     |> send_json(response)
   end
 
-  @spec session_fallthrough(Plug.Conn.t()) :: Plug.Conn.t()
-  defp session_fallthrough(conn) do
-    session_id = List.first(get_req_header(conn, "mcp-session-id"))
+  @spec session_terminated(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  defp session_terminated(conn, session_id) do
+    request_id = conn.body_params["id"]
+    method = conn.body_params["method"]
+
+    Wymcp.Telemetry.emit(:session, :not_found, %{}, %{
+      session_id: session_id,
+      request_id: request_id,
+      method: method
+    })
 
     require Logger
 
-    Logger.warning("Session not found or expired (id: #{session_id}). Operating sessionless.")
-
-    assign(
-      conn,
-      :wymcp_session_warning,
-      "Session not found or expired. Per-session state has been reset."
+    Logger.info(
+      "Session terminated (id: #{session_id}). Returning 404 to prompt client re-initialise."
     )
+
+    if conn.assigns[:wymcp_message_type] == :response or is_nil(request_id) do
+      conn
+      |> send_resp(404, "")
+      |> halt()
+    else
+      response = JsonRpc.error_response(:session_not_found, request_id)
+
+      conn
+      |> put_status(404)
+      |> send_json(response)
+    end
   end
 
   @spec session_not_ready(Plug.Conn.t()) :: Plug.Conn.t()

@@ -200,13 +200,12 @@ defmodule Wymcp.Session do
   Resolution order:
 
   1. The session pid stored in `conn.assigns[:wymcp_session_pid]` (the
-     authoritative case — this is the version negotiated during the
-     `initialize` handshake and pinned on the session).
-  2. The `MCP-Protocol-Version` request header, when no session pid is
-     present (sessionless fallback — Claude Code drops the
-     `Mcp-Session-Id` header on `tools/call` but still sends the
-     protocol-version one). Only honoured when the header value is in
-     `Wymcp.ProtocolVersion.supported/0`.
+     authoritative case — pinned at `initialize` time on the session).
+  2. The `MCP-Protocol-Version` request header. After
+     `Wymcp.Plugs.Session` enforces session presence on non-exempt
+     methods, this branch is reached only by `Methods.Initialize`
+     itself, where no session pid exists yet. Honoured only when the
+     header value is in `Wymcp.ProtocolVersion.supported/0`.
   3. `Wymcp.ProtocolVersion.latest/0` as a last resort.
 
   This is the single resolver consulted by `Methods.Initialize`,

@@ -15,6 +15,12 @@ defmodule Wymcp.Telemetry do
     - Measurements: `%{system_time: integer()}`
     - Metadata: `%{session_id: String.t()}`
 
+  * `[:wymcp, :session, :not_found]` — request bearing an unrecognised
+    `Mcp-Session-Id` rejected with HTTP 404
+    - Measurements: `%{system_time: integer()}`
+    - Metadata: `%{session_id: String.t(), request_id: term() | nil,
+      method: String.t() | nil}`
+
   * `[:wymcp, :tool, :start]` — tool execution starting
     - Measurements: `%{system_time: integer()}`
     - Metadata: `%{tool_name: String.t(), session_id: String.t() | nil}`

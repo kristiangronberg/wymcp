@@ -12,9 +12,28 @@ defmodule Wymcp.Plugs.SessionTest do
   Non-exempt requests without a valid session header are rejected with
   HTTP 400 (JSON-RPC -32600 invalid_request). This follows the MCP spec:
   "Servers that require a session ID SHOULD respond to requests without
-  an MCP-Session-Id header with HTTP 400 Bad Request." Stale or unknown session IDs fall through to sessionless mode with a warning
-  assign — downstream methods use compile-time tools as fallback. This prevents
-  clients from breaking when sessions expire after server restarts.
+  an MCP-Session-Id header with HTTP 400 Bad Request."
+
+  Non-exempt messages *with* a session header that the registry does
+  not recognise are rejected with HTTP 404. This follows the MCP
+  2025-11-25 spec, Streamable HTTP / Session Management clauses 3 and
+  4: a server MAY terminate a session at any time and MUST then
+  respond to requests carrying that ID with 404; the client MUST start
+  a new session by issuing a fresh InitializeRequest. A
+  server-restart-wiped registry is, from the spec's perspective, an
+  instance of clause 3 — there is no "I never saw this ID" branch
+  distinct from "I terminated this ID".
+
+  The 404 body branches on JSON-RPC message kind, since JSON-RPC 2.0
+  forbids responding to notifications and to responses:
+
+    * Request (`id` present, message-kind not `:response`) — body is
+      `{"jsonrpc":"2.0","id":<id>,"error":{"code":-32001,"message":
+      "Session terminated"}}`, matching the TypeScript SDK exactly
+      (no `data` field).
+    * Notification (no `id`) — HTTP 404 with empty body.
+    * Response message (`wymcp_message_type == :response`) — HTTP 404
+      with empty body.
 
   After session lookup, the plug validates the MCP-Protocol-Version
   header against the version negotiated during initialize. Missing or
@@ -91,21 +110,77 @@ defmodule Wymcp.Plugs.SessionTest do
   end
 
   @tag doc: """
-       A stale or unknown session ID (server restarted, session expired)
-       must not break the client. The plug logs a warning and falls through
-       sessionless — downstream methods use compile-time tools as fallback.
-       This works around clients that cache stale session IDs without
-       re-initializing (Claude Desktop, Claude Code).
+       Per MCP 2025-11-25 (Streamable HTTP / Session Management, clauses
+       3 and 4), a request bearing an unrecognised Mcp-Session-Id MUST
+       be answered with HTTP 404. The body uses JSON-RPC code -32001 and
+       message "Session terminated" — matching the TypeScript SDK
+       exactly (packages/server/src/server/streamableHttp.ts, where the
+       SDK throws `new McpError(-32001, "Session terminated")` with no
+       data field). Failure here means we have regressed to the old
+       silent fallthrough or drifted off the SDK wire shape.
        """
-  test "falls through sessionless when session ID is unknown" do
+  test "responds 404 with -32001 'Session terminated' for stale-session request" do
     conn =
       conn(:post, "/")
       |> put_req_header("mcp-session-id", "bogus")
       |> Map.put(:body_params, %{"method" => "tools/list", "id" => 1})
       |> SessionPlug.call(SessionPlug.init([]))
 
-    refute conn.halted
-    assert conn.assigns[:wymcp_session_warning] =~ "Session not found"
+    assert conn.status == 404
+    assert conn.halted
+
+    body = JSON.decode!(conn.resp_body)
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] == 1
+    assert body["error"]["code"] == -32001
+    assert body["error"]["message"] == "Session terminated"
+    refute Map.has_key?(body["error"], "data")
+    refute Map.has_key?(conn.assigns, :wymcp_session_pid)
+    refute Map.has_key?(conn.assigns, :wymcp_session_warning)
+  end
+
+  @tag doc: """
+       JSON-RPC 2.0 forbids responding to notifications. The MCP spec
+       still requires HTTP 404 for the stale-session signal, so the
+       reconciliation is: 404 status + empty body + no JSON-RPC
+       envelope. Returning an envelope with id:null would itself be a
+       JSON-RPC violation.
+       """
+  test "responds 404 with empty body for stale-session notification" do
+    conn =
+      conn(:post, "/")
+      |> put_req_header("mcp-session-id", "bogus")
+      |> Map.put(:body_params, %{"method" => "notifications/initialized"})
+      |> SessionPlug.call(SessionPlug.init([]))
+
+    assert conn.status == 404
+    assert conn.halted
+    assert conn.resp_body == ""
+    refute Map.has_key?(conn.assigns, :wymcp_session_pid)
+  end
+
+  @tag doc: """
+       Response messages (client-to-server answers to server-initiated
+       requests) carry an `id` referring to a request the server already
+       sent. Replying to a response with another JSON-RPC error would
+       itself be a JSON-RPC violation — you do not respond to responses.
+       HTTP 404 alone is the right signal, with empty body.
+       """
+  test "responds 404 with empty body for stale-session response message" do
+    conn =
+      conn(:post, "/")
+      |> put_req_header("mcp-session-id", "bogus")
+      |> Map.put(:body_params, %{
+        "jsonrpc" => "2.0",
+        "id" => 42,
+        "result" => %{"role" => "assistant"}
+      })
+      |> assign(:wymcp_message_type, :response)
+      |> SessionPlug.call(SessionPlug.init([]))
+
+    assert conn.status == 404
+    assert conn.halted
+    assert conn.resp_body == ""
     refute Map.has_key?(conn.assigns, :wymcp_session_pid)
   end
 
