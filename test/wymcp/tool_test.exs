@@ -417,12 +417,37 @@ defmodule Wymcp.ToolTest do
       refute is_error?(result)
     end
 
-    test "describe with no topic returns action summary (same as help)" do
+    test "describe with no topic returns full schemas for every action" do
       result = WidgetTool.run(build_ctx(), %{"action" => "describe"})
       content = decode_json_content(result)
       assert content["tool"] == "widgets"
       assert is_map(content["actions"])
+
+      # The full schema for `create` is exposed, not just the summary.
+      create = content["actions"]["create"]
+      assert create["description"] == "Create a widget"
+      assert create["required"] == ["name"]
+      assert create["defaults"] == %{"color" => "blue"}
+      assert is_map(create["properties"]["name"])
       refute is_error?(result)
+    end
+
+    test "describe with no topic differs from help with no topic" do
+      describe_result = WidgetTool.run(build_ctx(), %{"action" => "describe"})
+      help_result = WidgetTool.run(build_ctx(), %{"action" => "help"})
+
+      describe_content = decode_json_content(describe_result)
+      help_content = decode_json_content(help_result)
+
+      # Help stays terse: per-action map has only description + required.
+      help_create = help_content["actions"]["create"]
+      refute Map.has_key?(help_create, "properties")
+      refute Map.has_key?(help_create, "defaults")
+
+      # Describe is broader: full schemas including properties + defaults.
+      describe_create = describe_content["actions"]["create"]
+      assert Map.has_key?(describe_create, "properties")
+      assert Map.has_key?(describe_create, "defaults")
     end
 
     test "describe with unknown topic returns error response" do

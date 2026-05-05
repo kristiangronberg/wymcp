@@ -46,6 +46,16 @@ defmodule Wymcp.Tool do
   - `:required` — list of required property names (strings)
   - `:defaults` — map of default values merged into `data` before dispatch
 
+  ## Built-in `help` and `describe` actions
+
+  Every tool exposes two built-in introspection actions:
+
+  - `help` — terse listing. With no topic: `{action_name => {description, required}}`.
+    With a topic: slim schema for that action.
+  - `describe` — full listing. With no topic: full schema for every action
+    (properties, defaults, notes, examples). With a topic: full schema for that
+    action.
+
   ## Return values from `run_action/2`
 
   - `{:ok, response_data}` — success, response sent as JSON
@@ -243,7 +253,7 @@ defmodule Wymcp.Tool do
 
     case Map.get(data, "topic") do
       nil ->
-        {:ok, Context.json(action_summary(module, actions))}
+        {:ok, Context.json(full_action_listing(module, actions))}
 
       topic ->
         with {:ok, action_atom, action, schema} <- fetch_action(actions, topic) do
@@ -389,6 +399,27 @@ defmodule Wymcp.Tool do
       end)
 
     %{tool: module.name(), actions: summary}
+  end
+
+  @spec full_action_listing(module(), map()) :: map()
+  defp full_action_listing(module, actions) do
+    actions_map =
+      Enum.into(actions, %{}, fn {action_atom, schema} ->
+        full =
+          Map.take(schema, [
+            :description,
+            :properties,
+            :required,
+            :defaults,
+            :notes,
+            :related,
+            :examples
+          ])
+
+        {Atom.to_string(action_atom), full}
+      end)
+
+    %{tool: module.name(), actions: actions_map}
   end
 
   @spec slim_action_schema(action_schema()) :: map()
