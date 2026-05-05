@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1]
+
+**DATE:** 2026-05-05
+
+### Changed (BREAKING)
+
+- `serverInfo.icons[]` emitted by `initialize` now strictly conforms
+  to the MCP 2025-11-25 `Icon` schema. The accepted input shape for
+  `:icons` inside `Wymcp.Router`'s `:server_info` option changed:
+    * Required: `:src` (was previously `:url`).
+    * Optional: `:mime_type` (was previously `:media_type`), `:sizes`,
+      `:theme`.
+  Legacy `:url` and `:media_type` keys are no longer recognised — they
+  are dropped from the response and surfaced via a `Logger.warning/1`
+  naming every unknown key. Update call sites accordingly. There is no
+  back-compat shim; the project is pre-1.0 and cleaning up the encoder
+  was the priority.
+
+### Fixed
+
+- Strict MCP clients (notably Claude.ai) previously tore down the
+  session on `initialize` because the response carried `"url"` /
+  `"media_type"` keys that the spec does not define. The new encoder
+  uses an explicit whitelist (`:src`, `:mime_type`, `:sizes`,
+  `:theme`) so the response matches the spec exactly.
+
+### Added
+
+- `Wymcp.Methods.Initialize` now logs a `Logger.warning/1` whenever a
+  caller passes an unrecognised key inside an icon map. The warning
+  names every dropped key and the accepted set, so a misconfigured
+  caller can find the source quickly without diffing JSON payloads.
+
 ## [0.4.0]
 
 **DATE:** 2026-05-05

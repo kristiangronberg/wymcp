@@ -49,9 +49,12 @@ defmodule Wymcp.Router do
     how an LLM should interact with this server's tools (optional)
   - `:server_info` — a map of optional server identity fields displayed by MCP
     clients. Supported keys: `:title` (human-readable name), `:description`,
-    `:website_url`, and `:icons` (list of `%{url: ..., media_type: ...}` maps).
-    These are merged with the `name` and `version` from application config
-    (optional)
+    `:website_url`, and `:icons`. Each icon is a map with `:src` (required
+    URL or `data:` URI) and the optional keys `:mime_type` (e.g. `"image/png"`),
+    `:sizes` (list of `"WxH"` strings or `"any"`), and `:theme` (`"light"` or
+    `"dark"`). Any other key in an icon map is dropped and a warning is
+    logged. These fields are merged with `name` and `version` from
+    application config (optional).
 
   ```mermaid
   flowchart TD

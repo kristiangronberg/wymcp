@@ -17,6 +17,21 @@ defmodule Wymcp.RouterTest do
   import Plug.Test
   import Plug.Conn
 
+  @schema_json File.read!("priv/schema.json") |> JSON.decode!()
+  @defs Map.get(@schema_json, "$defs", %{})
+
+  # Strict copy of the canonical Icon definition: forbids unknown
+  # properties so a missed key rename in `encode_icon/1` is caught
+  # by JSV instead of silently passing.
+  @strict_icon_schema %{
+    "$schema" => "https://json-schema.org/draft/2020-12/schema",
+    "$ref" => "#/$defs/Icon",
+    "$defs" =>
+      Map.update!(@defs, "Icon", fn icon ->
+        Map.put(icon, "additionalProperties", false)
+      end)
+  }
+
   defmodule TestTool do
     use Wymcp.Tool
 
@@ -179,12 +194,19 @@ defmodule Wymcp.RouterTest do
       assert resp["result"]["instructions"] == instructions
     end
 
-    test "includes enriched server_info fields when configured" do
+    test "includes enriched server_info fields and icons conform to the MCP Icon schema" do
       server_info = %{
         title: "My Awesome Server",
         description: "A server that does great things",
         website_url: "https://example.com",
-        icons: [%{url: "https://example.com/icon.png", media_type: "image/png"}]
+        icons: [
+          %{
+            src: "https://example.com/icon.svg",
+            mime_type: "image/svg+xml",
+            sizes: ["any"],
+            theme: "dark"
+          }
+        ]
       }
 
       body = %{
@@ -206,8 +228,14 @@ defmodule Wymcp.RouterTest do
       assert server_info_resp["description"] == "A server that does great things"
       assert server_info_resp["websiteUrl"] == "https://example.com"
 
-      assert [%{"url" => "https://example.com/icon.png", "mediaType" => "image/png"}] =
-               server_info_resp["icons"]
+      # Each emitted icon must validate against the strict canonical
+      # Icon schema. This single assertion subsumes hand-rolled checks
+      # for `src`, `mimeType`, `sizes`, `theme`, type correctness, and
+      # absence of unknown fields like `mime_type`.
+      for icon <- server_info_resp["icons"] do
+        assert :ok = Wymcp.JsonRpc.validate_schema(@strict_icon_schema, icon),
+               "icon #{inspect(icon)} did not validate against the canonical Icon schema"
+      end
 
       # name and version still present from app config
       assert server_info_resp["name"]
@@ -238,6 +266,57 @@ defmodule Wymcp.RouterTest do
       refute Map.has_key?(server_info_resp, "description")
       refute Map.has_key?(server_info_resp, "websiteUrl")
       refute Map.has_key?(server_info_resp, "icons")
+    end
+
+    test "drops unknown icon keys and logs a warning naming them" do
+      server_info = %{
+        icons: [
+          %{
+            src: "https://example.com/icon.png",
+            mime_type: "image/png",
+            # Unknown keys — should be dropped and logged.
+            url: "https://legacy.example.com/icon.png",
+            media_type: "image/png",
+            colour: "blue"
+          }
+        ]
+      }
+
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => "2025-11-25",
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "1.0"}
+        }
+      }
+
+      {conn, log} =
+        with_log(fn ->
+          call_router(body, server_info: server_info)
+        end)
+
+      resp = JSON.decode!(conn.resp_body)
+      [icon] = resp["result"]["serverInfo"]["icons"]
+
+      # Output validates against the canonical Icon schema (strict
+      # variant prepared in Task 1).
+      assert :ok = Wymcp.JsonRpc.validate_schema(@strict_icon_schema, icon)
+
+      # Unknown keys are absent from the wire output.
+      refute Map.has_key?(icon, "url")
+      refute Map.has_key?(icon, "media_type")
+      refute Map.has_key?(icon, "mediaType")
+      refute Map.has_key?(icon, "colour")
+
+      # Warning log names every unknown key so an upgrading caller
+      # can find the source of the drop in their logs.
+      assert log =~ "dropping unknown icon keys"
+      assert log =~ ":url"
+      assert log =~ ":media_type"
+      assert log =~ ":colour"
     end
 
     @tag doc: """

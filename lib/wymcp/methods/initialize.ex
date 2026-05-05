@@ -3,7 +3,18 @@ defmodule Wymcp.Methods.Initialize do
 
   import Plug.Conn
   import Wymcp.Response
+  require Logger
   alias Wymcp.{JsonRpc, ProtocolVersion, Session}
+
+  # Whitelist of accepted Icon input keys (snake_case atoms) and
+  # their MCP wire names. Per CLAUDE.md module-layout convention,
+  # this attribute lives between aliases and the public API.
+  @icon_key_map %{
+    src: "src",
+    mime_type: "mimeType",
+    sizes: "sizes",
+    theme: "theme"
+  }
 
   @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
@@ -99,23 +110,29 @@ defmodule Wymcp.Methods.Initialize do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  @spec maybe_put_icons(map(), list() | nil) :: map()
+  @spec maybe_put_icons(map(), [%{atom() => term()}] | nil) :: map()
   defp maybe_put_icons(map, nil), do: map
   defp maybe_put_icons(map, []), do: map
 
   defp maybe_put_icons(map, icons) when is_list(icons) do
-    encoded =
-      Enum.map(icons, fn icon ->
-        icon
-        |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
-        |> then(fn m ->
-          case Map.pop(m, "media_type") do
-            {nil, m} -> m
-            {val, m} -> Map.put(m, "mediaType", val)
-          end
-        end)
-      end)
+    Map.put(map, "icons", Enum.map(icons, &encode_icon/1))
+  end
 
-    Map.put(map, "icons", encoded)
+  @spec encode_icon(%{atom() => term()}) :: %{String.t() => term()}
+  defp encode_icon(icon) do
+    {known, unknown} = Map.split(icon, Map.keys(@icon_key_map))
+    _ = log_dropped_keys(unknown)
+    Map.new(known, fn {k, v} -> {Map.fetch!(@icon_key_map, k), v} end)
+  end
+
+  @spec log_dropped_keys(map()) :: :ok
+  defp log_dropped_keys(unknown) when map_size(unknown) == 0, do: :ok
+
+  defp log_dropped_keys(unknown) do
+    Logger.warning(
+      "Wymcp.Methods.Initialize: dropping unknown icon keys " <>
+        "#{inspect(Map.keys(unknown))}. Accepted keys: " <>
+        "#{inspect(Map.keys(@icon_key_map))}."
+    )
   end
 end
