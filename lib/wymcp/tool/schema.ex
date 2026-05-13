@@ -103,16 +103,28 @@ defmodule Wymcp.Tool.Schema do
   @spec build_variant(atom(), map()) :: json_schema()
   defp build_variant(action_name, schema) do
     action_str = Atom.to_string(action_name)
+    required = Map.get(schema, :required, [])
+    one_of_groups = Map.get(schema, :required_one_of, [])
 
     data_schema = %{"type" => "object", "properties" => schema.properties}
 
     data_schema =
-      if schema.required != [],
-        do: Map.put(data_schema, "required", schema.required),
+      if required != [],
+        do: Map.put(data_schema, "required", required),
         else: data_schema
 
-    required =
-      if schema.required != [],
+    data_schema =
+      case one_of_groups do
+        [] ->
+          data_schema
+
+        groups ->
+          any_of = Enum.map(groups, fn group -> %{"required" => group} end)
+          Map.put(data_schema, "anyOf", any_of)
+      end
+
+    variant_required =
+      if required != [] or one_of_groups != [],
         do: ["action", "data"],
         else: ["action"]
 
@@ -121,7 +133,7 @@ defmodule Wymcp.Tool.Schema do
         "action" => %{"const" => action_str},
         "data" => data_schema
       },
-      "required" => required
+      "required" => variant_required
     }
 
     case Map.get(schema, :description) do

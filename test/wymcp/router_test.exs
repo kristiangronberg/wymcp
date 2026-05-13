@@ -106,6 +106,290 @@ defmodule Wymcp.RouterTest do
     def authenticate(_conn), do: raise("auth exploded")
   end
 
+  defmodule BadShapeRequiredTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "bad_required"
+    def description, do: "Required is not a list of binaries"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          required: [:x]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule UnknownFieldRequiredTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "unknown_required"
+    def description, do: "Required references a field not in properties"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          required: ["y"]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule BadShapeRequiredOneOfTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "bad_one_of"
+    def description, do: "required_one_of group is a string"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          required_one_of: [["x"], "y"]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule UnknownFieldRequiredOneOfTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "unknown_one_of"
+    def description, do: "required_one_of references field not in properties"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          required_one_of: [["x"], ["y"]]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule EmptyGroupTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "empty_group"
+    def description, do: "required_one_of has an empty group"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          required_one_of: [["x"], []]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule SupersetGroupTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "superset"
+    def description, do: "required_one_of has a strict-superset group (dead code)"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{
+            "a" => %{"type" => "string"},
+            "b" => %{"type" => "string"}
+          },
+          required_one_of: [["a"], ["a", "b"]]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule BadNotesTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "bad_notes"
+    def description, do: ":notes is not a binary"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          notes: 123
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule BadRelatedTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "bad_related"
+    def description, do: ":related is not a list of binaries"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          related: [:identify]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule BadExamplesTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "bad_examples"
+    def description, do: ":examples is not a list of maps"
+
+    def actions do
+      %{
+        op: %{
+          description: "Bad",
+          properties: %{"x" => %{"type" => "string"}},
+          examples: ["payload-1"]
+        }
+      }
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule OneOfTool do
+    use Wymcp.Tool
+
+    def name, do: "oneof"
+    def description, do: "OR-of-AND test tool"
+
+    def actions do
+      %{
+        identify: %{
+          description: "Identify by id or (name + color)",
+          properties: %{
+            "id" => %{"type" => "integer"},
+            "name" => %{"type" => "string"},
+            "color" => %{"type" => "string"}
+          },
+          required_one_of: [["id"], ["name", "color"]]
+        }
+      }
+    end
+
+    def run_action(:identify, data, _ctx), do: {:ok, %{found: data}}
+  end
+
+  defmodule SlimOneOfTool do
+    use Wymcp.Tool
+
+    def name, do: "slim_oneof"
+    def description, do: "OR-of-AND test tool, slim mode"
+    def schema_mode, do: :slim
+
+    def actions do
+      %{
+        identify: %{
+          description: "Identify by id or (name + color)",
+          properties: %{
+            "id" => %{"type" => "integer"},
+            "name" => %{"type" => "string"},
+            "color" => %{"type" => "string"}
+          },
+          required_one_of: [["id"], ["name", "color"]]
+        }
+      }
+    end
+
+    def run_action(:identify, data, _ctx), do: {:ok, %{found: data}}
+  end
+
   defp call_router(body, opts \\ []) do
     router_opts = Keyword.merge([tools: [TestTool]], opts)
     init_opts = Wymcp.Router.init(router_opts)
@@ -1026,6 +1310,154 @@ defmodule Wymcp.RouterTest do
       resp = JSON.decode!(conn.resp_body)
       assert resp["id"] == nil
       assert resp["error"]["code"] == -32601
+    end
+  end
+
+  describe "init/1 — action schema validation" do
+    test "raises when :required is not a list of binaries" do
+      assert_raise ArgumentError, ~r/required/, fn ->
+        Wymcp.Router.init(tools: [BadShapeRequiredTool])
+      end
+    end
+
+    test "raises when :required references a field absent from :properties" do
+      assert_raise ArgumentError, ~r/(unknown|not declared)/i, fn ->
+        Wymcp.Router.init(tools: [UnknownFieldRequiredTool])
+      end
+    end
+
+    test "raises when a :required_one_of group is not a list of binaries" do
+      assert_raise ArgumentError, ~r/required_one_of/, fn ->
+        Wymcp.Router.init(tools: [BadShapeRequiredOneOfTool])
+      end
+    end
+
+    test "raises when :required_one_of references a field absent from :properties" do
+      assert_raise ArgumentError, ~r/(unknown|not declared)/i, fn ->
+        Wymcp.Router.init(tools: [UnknownFieldRequiredOneOfTool])
+      end
+    end
+
+    test "raises when a :required_one_of group is empty" do
+      assert_raise ArgumentError, ~r/empty/i, fn ->
+        Wymcp.Router.init(tools: [EmptyGroupTool])
+      end
+    end
+
+    test "raises when a :required_one_of group is a strict superset of another" do
+      assert_raise ArgumentError, ~r/(superset|dead)/i, fn ->
+        Wymcp.Router.init(tools: [SupersetGroupTool])
+      end
+    end
+
+    test "raises when :notes is not a binary" do
+      assert_raise ArgumentError, ~r/:notes/, fn ->
+        Wymcp.Router.init(tools: [BadNotesTool])
+      end
+    end
+
+    test "raises when :related is not a list of binaries" do
+      assert_raise ArgumentError, ~r/:related/, fn ->
+        Wymcp.Router.init(tools: [BadRelatedTool])
+      end
+    end
+
+    test "raises when :examples is not a list of maps" do
+      assert_raise ArgumentError, ~r/:examples/, fn ->
+        Wymcp.Router.init(tools: [BadExamplesTool])
+      end
+    end
+  end
+
+  describe "tools/list + tools/call with :required_one_of (end-to-end)" do
+    @tag doc: """
+    Full mode advertises the constraint to clients via `anyOf` on the
+    variant's `data`. This is descriptive only — see the runtime test
+    below for enforcement.
+    """
+    test "full mode: tools/list exposes anyOf for required_one_of" do
+      session_id = initialize(tools: [OneOfTool])
+
+      body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
+      conn = call_with_session(body, session_id, tools: [OneOfTool])
+      resp = JSON.decode!(conn.resp_body)
+
+      [tool] = resp["result"]["tools"]
+      [variant] = tool["inputSchema"]["oneOf"]
+
+      assert variant["properties"]["data"]["anyOf"] == [
+               %{"required" => ["id"]},
+               %{"required" => ["name", "color"]}
+             ]
+    end
+
+    @tag doc: """
+    Slim mode emits a bare `data: {type: "object"}`, so the constraint is
+    NOT advertised in the inputSchema. Clients learn about it via the
+    framework-provided `help`/`describe` actions.
+    """
+    test "slim mode: tools/list omits anyOf (slim has no per-action constraints)" do
+      session_id = initialize(tools: [SlimOneOfTool])
+
+      body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
+      conn = call_with_session(body, session_id, tools: [SlimOneOfTool])
+      resp = JSON.decode!(conn.resp_body)
+
+      [tool] = resp["result"]["tools"]
+      refute Map.has_key?(tool["inputSchema"], "oneOf")
+      refute Map.has_key?(tool["inputSchema"]["properties"]["data"], "anyOf")
+    end
+
+    @tag doc: """
+    Full mode argument validation: a tools/call with no group satisfied is
+    rejected by `ToolsCall.validate_arguments/2` against the tool's
+    `inputSchema`, which encodes `required_one_of` as `anyOf` on the
+    variant's `data`. The response is a JSON-RPC error with code
+    -32602 (`invalid_params`).
+    """
+    test "full mode: tools/call with no group satisfied is rejected by inputSchema validation" do
+      session_id = initialize(tools: [OneOfTool])
+
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "oneof",
+          "arguments" => %{"action" => "identify", "data" => %{"name" => "alpha"}}
+        }
+      }
+
+      conn = call_with_session(body, session_id, tools: [OneOfTool])
+      resp = JSON.decode!(conn.resp_body)
+
+      assert resp["error"]["code"] == -32602
+    end
+
+    @tag doc: """
+    Slim mode runtime enforcement: same code path as full mode. The
+    constraint is invisible in `tools/list` but still enforced at
+    dispatch time, proving the runtime check is the sole enforcer.
+    """
+    test "slim mode: tools/call with no group satisfied returns missing_required_group" do
+      session_id = initialize(tools: [SlimOneOfTool])
+
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "slim_oneof",
+          "arguments" => %{"action" => "identify", "data" => %{"name" => "alpha"}}
+        }
+      }
+
+      conn = call_with_session(body, session_id, tools: [SlimOneOfTool])
+      resp = JSON.decode!(conn.resp_body)
+
+      content = resp["result"]["content"] |> hd() |> Map.get("text") |> JSON.decode!()
+      assert content["error"] == "missing_required_group"
+      assert content["required_one_of"] == [["id"], ["name", "color"]]
     end
   end
 end

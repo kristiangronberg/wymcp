@@ -44,6 +44,16 @@ defmodule Wymcp.Tool.SchemaTest do
       },
       required: [],
       defaults: %{"limit" => 10}
+    },
+    identify: %{
+      description: "Identify by id or by (name + color)",
+      properties: %{
+        "id" => %{"type" => "integer"},
+        "name" => %{"type" => "string"},
+        "color" => %{"type" => "string"}
+      },
+      required_one_of: [["id"], ["name", "color"]],
+      defaults: %{}
     }
   }
 
@@ -59,13 +69,41 @@ defmodule Wymcp.Tool.SchemaTest do
       schema = Schema.build(@actions)
       enum = schema["properties"]["action"]["enum"]
 
-      assert Enum.sort(enum) == ["create", "get", "list"]
+      assert Enum.sort(enum) ==
+               @actions |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
     end
 
     test "generates one oneOf variant per action" do
       schema = Schema.build(@actions)
 
-      assert length(schema["oneOf"]) == 3
+      assert length(schema["oneOf"]) == map_size(@actions)
+    end
+
+    @tag doc: "required_one_of becomes anyOf on the variant's data schema"
+    test "variant with required_one_of renders anyOf on data" do
+      schema = Schema.build(@actions)
+      identify = find_variant(schema, "identify")
+
+      assert identify["properties"]["data"]["anyOf"] == [
+               %{"required" => ["id"]},
+               %{"required" => ["name", "color"]}
+             ]
+    end
+
+    @tag doc:
+           "required_one_of forces data to be required on the variant even when :required is empty"
+    test "variant with required_one_of marks data as required" do
+      schema = Schema.build(@actions)
+      identify = find_variant(schema, "identify")
+
+      assert "data" in identify["required"]
+    end
+
+    test "variant without required_one_of does not include anyOf" do
+      schema = Schema.build(@actions)
+      list = find_variant(schema, "list")
+
+      refute Map.has_key?(list["properties"]["data"], "anyOf")
     end
 
     @tag doc: "Actions with required fields force data to be required too"

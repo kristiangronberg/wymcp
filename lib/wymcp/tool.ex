@@ -43,8 +43,52 @@ defmodule Wymcp.Tool do
 
   - `:description` — human-readable description (appears in oneOf schema)
   - `:properties` — JSON Schema properties for the action's `data` parameter
-  - `:required` — list of required property names (strings)
+
+  Optional fields:
+
+  - `:required` — list of unconditionally required property names (defaults to `[]`).
+    Every listed field must be present in `data` (AND-semantics).
+  - `:required_one_of` — list of groups, where each group is a list of property
+    names. At least one group must be fully present (OR-of-AND semantics).
+    Combines with `:required` — both checks run, both must pass. Surfaces in
+    `help` output and is rendered into the `inputSchema` as `anyOf` on the
+    action variant's `data`.
   - `:defaults` — map of default values merged into `data` before dispatch
+    (defaults to `%{}`).
+  - `:notes` — long-form notes returned by `describe` and `help` with topic.
+  - `:related` — list of related action name strings returned by `describe`.
+  - `:examples` — list of example payload maps returned by `describe`.
+
+  Defaults are applied after validation: values supplied via `:defaults`
+  do not count toward satisfying `:required` or `:required_one_of`. Both
+  checks run against the caller's `data` as received.
+
+  Action schemas are validated at server boot via `Wymcp.Router.init/1`. A
+  malformed schema (e.g. a `:required_one_of` group referencing a field not
+  declared in `:properties`) raises `ArgumentError` immediately, surfacing
+  the misconfiguration before any request is served.
+
+  ### Example: OR-of-AND required group
+
+      get_pull_request: %{
+        description: "Get pull request details",
+        properties: %{
+          "url" => %{"type" => "string"},
+          "project_key" => %{"type" => "string"},
+          "repo_slug" => %{"type" => "string"},
+          "pr_id" => %{"type" => "integer"}
+        },
+        required_one_of: [["url"], ["project_key", "repo_slug", "pr_id"]]
+      }
+
+  ### Slim mode trade-off for `:required_one_of`
+
+  In slim schema mode (`schema_mode/0` returns `:slim`), the `inputSchema`
+  emitted by `tools/list` does not encode per-action constraints — it only
+  lists action names and one-line descriptions. `:required_one_of` is
+  therefore visible to clients only via the `help`/`describe` round-trip.
+  Full schema mode (default) renders the constraint as `anyOf` on the
+  variant's `data`.
 
   ## Built-in `help` and `describe` actions
 
@@ -126,10 +170,14 @@ defmodule Wymcp.Tool do
   alias Wymcp.Context
 
   @type action_schema :: %{
-          description: String.t(),
-          properties: map(),
-          required: [String.t()],
-          defaults: map()
+          :description => String.t(),
+          :properties => map(),
+          optional(:required) => [String.t()],
+          optional(:required_one_of) => [[String.t()]],
+          optional(:defaults) => map(),
+          optional(:notes) => String.t(),
+          optional(:related) => [String.t()],
+          optional(:examples) => [map()]
         }
 
   @type hint :: Wymcp.Hint.t()
@@ -224,6 +272,195 @@ defmodule Wymcp.Tool do
     end
   end
 
+  # -- Boot-time validation --
+
+  @doc """
+  Validate every action schema in `module`. Raises `ArgumentError` with a
+  descriptive message on the first malformed action.
+
+  Called by `Wymcp.Router.init/1` so that misconfigured tools fail at boot
+  rather than at the first request.
+  """
+  @spec validate_actions!(module()) :: :ok
+  def validate_actions!(module) when is_atom(module) do
+    actions = module.actions()
+
+    Enum.each(actions, fn {action, schema} ->
+      validate_action_schema!(module, action, schema)
+    end)
+
+    :ok
+  end
+
+  @spec validate_action_schema!(module(), atom(), map()) :: :ok
+  defp validate_action_schema!(module, action, schema) do
+    properties = Map.get(schema, :properties, %{})
+
+    validate_required!(module, action, Map.get(schema, :required, []), properties)
+
+    validate_required_one_of!(
+      module,
+      action,
+      Map.get(schema, :required_one_of, []),
+      properties
+    )
+
+    validate_doc_fields!(module, action, schema)
+
+    :ok
+  end
+
+  @spec validate_required!(module(), atom(), term(), map()) :: :ok
+  defp validate_required!(module, action, required, properties) do
+    unless is_list(required) and Enum.all?(required, &is_binary/1) do
+      raise ArgumentError,
+            "Tool #{inspect(module)} action #{inspect(action)}: " <>
+              ":required must be a list of binaries, got #{inspect(required)}"
+    end
+
+    if length(required) != length(Enum.uniq(required)) do
+      raise ArgumentError,
+            "Tool #{inspect(module)} action #{inspect(action)}: " <>
+              ":required has duplicate entries: #{inspect(required)}"
+    end
+
+    case Enum.reject(required, &Map.has_key?(properties, &1)) do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                ":required references field(s) not declared in :properties: " <>
+                inspect(unknown)
+    end
+  end
+
+  @spec validate_required_one_of!(module(), atom(), term(), map()) :: :ok
+  defp validate_required_one_of!(_module, _action, [], _properties), do: :ok
+
+  defp validate_required_one_of!(module, action, groups, properties) do
+    unless is_list(groups) and
+             Enum.all?(groups, fn g ->
+               is_list(g) and Enum.all?(g, &is_binary/1)
+             end) do
+      raise ArgumentError,
+            "Tool #{inspect(module)} action #{inspect(action)}: " <>
+              ":required_one_of must be a list of lists of binaries, got " <>
+              inspect(groups)
+    end
+
+    Enum.each(groups, fn group ->
+      cond do
+        group == [] ->
+          raise ArgumentError,
+                "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                  ":required_one_of contains an empty group"
+
+        length(group) != length(Enum.uniq(group)) ->
+          raise ArgumentError,
+                "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                  ":required_one_of group has duplicate entries: #{inspect(group)}"
+
+        true ->
+          unknown = Enum.reject(group, &Map.has_key?(properties, &1))
+
+          if unknown != [] do
+            raise ArgumentError,
+                  "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                    ":required_one_of group references field(s) not declared " <>
+                    "in :properties: #{inspect(unknown)}"
+          end
+      end
+    end)
+
+    if length(groups) != length(Enum.uniq(groups)) do
+      raise ArgumentError,
+            "Tool #{inspect(module)} action #{inspect(action)}: " <>
+              ":required_one_of has duplicate groups: #{inspect(groups)}"
+    end
+
+    check_no_strict_superset!(module, action, groups)
+    :ok
+  end
+
+  @spec check_no_strict_superset!(module(), atom(), [[String.t()]]) :: :ok
+  defp check_no_strict_superset!(module, action, groups) do
+    indexed = groups |> Enum.map(&MapSet.new/1) |> Enum.with_index()
+
+    Enum.each(indexed, fn {a, i} ->
+      Enum.each(indexed, fn {b, j} ->
+        if i != j and MapSet.subset?(a, b) and a != b do
+          raise ArgumentError,
+                "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                  ":required_one_of group #{inspect(Enum.at(groups, j))} is a " <>
+                  "strict superset of #{inspect(Enum.at(groups, i))} (dead code: " <>
+                  "the smaller group always satisfies first)"
+        end
+      end)
+    end)
+
+    :ok
+  end
+
+  @spec validate_doc_fields!(module(), atom(), map()) :: :ok
+  defp validate_doc_fields!(module, action, schema) do
+    validate_notes!(module, action, schema)
+    validate_related!(module, action, schema)
+    validate_examples!(module, action, schema)
+    :ok
+  end
+
+  @spec validate_notes!(module(), atom(), map()) :: :ok
+  defp validate_notes!(module, action, schema) do
+    case Map.fetch(schema, :notes) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_binary(value) ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                ":notes must be a binary, got #{inspect(value)}"
+    end
+  end
+
+  @spec validate_related!(module(), atom(), map()) :: :ok
+  defp validate_related!(module, action, schema) do
+    case Map.fetch(schema, :related) do
+      :error ->
+        :ok
+
+      {:ok, value} ->
+        if is_list(value) and Enum.all?(value, &is_binary/1) do
+          :ok
+        else
+          raise ArgumentError,
+                "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                  ":related must be a list of binaries, got #{inspect(value)}"
+        end
+    end
+  end
+
+  @spec validate_examples!(module(), atom(), map()) :: :ok
+  defp validate_examples!(module, action, schema) do
+    case Map.fetch(schema, :examples) do
+      :error ->
+        :ok
+
+      {:ok, value} ->
+        if is_list(value) and Enum.all?(value, &is_map/1) do
+          :ok
+        else
+          raise ArgumentError,
+                "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                  ":examples must be a list of maps, got #{inspect(value)}"
+        end
+    end
+  end
+
   # -- Dispatch (called by generated run/2) --
 
   @doc false
@@ -262,6 +499,7 @@ defmodule Wymcp.Tool do
               :description,
               :properties,
               :required,
+              :required_one_of,
               :defaults,
               :notes,
               :related,
@@ -283,7 +521,8 @@ defmodule Wymcp.Tool do
     with {:ok, action} <- parse_action(action_str, actions),
          schema = Map.fetch!(actions, action),
          :ok <- check_required(data, schema, action_str),
-         merged = apply_defaults(data, schema.defaults) do
+         :ok <- check_required_one_of(data, schema, action_str),
+         merged = apply_defaults(data, Map.get(schema, :defaults, %{})) do
       handle_result(module, action, ctx, module.run_action(action, merged, ctx))
     else
       {:error, :unknown_action} ->
@@ -296,11 +535,19 @@ defmodule Wymcp.Tool do
            message: "Required fields missing: #{Enum.join(missing, ", ")}",
            missing: missing,
            action: action_str,
-           input_schema: %{
-             properties: schema.properties,
-             required: schema.required,
-             defaults: schema.defaults
-           }
+           input_schema: schema_summary(schema)
+         })}
+
+      {:error, {:missing_required_groups, groups, action_str, schema}} ->
+        {:ok,
+         Context.json(%{
+           error: "missing_required_group",
+           message:
+             "At least one of these field groups must be fully present: " <>
+               format_groups(groups),
+           required_one_of: groups,
+           action: action_str,
+           input_schema: schema_summary(schema)
          })}
     end
   end
@@ -318,11 +565,51 @@ defmodule Wymcp.Tool do
 
   @spec check_required(map(), action_schema(), String.t()) :: :ok | {:error, tuple()}
   defp check_required(data, schema, action_str) do
-    missing = Enum.reject(schema.required, &Map.has_key?(data, &1))
+    required = Map.get(schema, :required, [])
+    missing = Enum.reject(required, &Map.has_key?(data, &1))
 
     if missing == [],
       do: :ok,
       else: {:error, {:missing_required, missing, action_str, schema}}
+  end
+
+  @spec check_required_one_of(map(), action_schema(), String.t()) ::
+          :ok | {:error, tuple()}
+  defp check_required_one_of(data, schema, action_str) do
+    case Map.get(schema, :required_one_of, []) do
+      [] ->
+        :ok
+
+      groups ->
+        if Enum.any?(groups, fn group ->
+             Enum.all?(group, &Map.has_key?(data, &1))
+           end) do
+          :ok
+        else
+          {:error, {:missing_required_groups, groups, action_str, schema}}
+        end
+    end
+  end
+
+  @spec format_groups([[String.t()]]) :: String.t()
+  defp format_groups(groups) do
+    groups
+    |> Enum.map(fn group -> "(" <> Enum.join(group, " + ") <> ")" end)
+    |> Enum.join(" OR ")
+  end
+
+  @spec schema_summary(action_schema()) :: map()
+  defp schema_summary(schema) do
+    base = %{
+      properties: schema.properties,
+      required: Map.get(schema, :required, []),
+      defaults: Map.get(schema, :defaults, %{})
+    }
+
+    case Map.get(schema, :required_one_of, []) do
+      [] -> base
+      groups -> Map.put(base, :required_one_of, groups)
+    end
   end
 
   @spec apply_defaults(map(), map()) :: map()
@@ -395,7 +682,18 @@ defmodule Wymcp.Tool do
   defp action_summary(module, actions) do
     summary =
       Map.new(actions, fn {action, schema} ->
-        {Atom.to_string(action), %{description: schema.description, required: schema.required}}
+        entry = %{
+          description: schema.description,
+          required: Map.get(schema, :required, [])
+        }
+
+        entry =
+          case Map.get(schema, :required_one_of, []) do
+            [] -> entry
+            groups -> Map.put(entry, :required_one_of, groups)
+          end
+
+        {Atom.to_string(action), entry}
       end)
 
     %{tool: module.name(), actions: summary}
@@ -410,6 +708,7 @@ defmodule Wymcp.Tool do
             :description,
             :properties,
             :required,
+            :required_one_of,
             :defaults,
             :notes,
             :related,
@@ -429,7 +728,16 @@ defmodule Wymcp.Tool do
         {name, Map.take(prop, ["type", "description"])}
       end)
 
-    %{description: schema.description, required: schema.required, properties: properties}
+    base = %{
+      description: schema.description,
+      required: Map.get(schema, :required, []),
+      properties: properties
+    }
+
+    case Map.get(schema, :required_one_of, []) do
+      [] -> base
+      groups -> Map.put(base, :required_one_of, groups)
+    end
   end
 
   @spec fetch_action(map(), String.t()) ::

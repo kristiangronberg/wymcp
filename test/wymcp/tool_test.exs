@@ -57,6 +57,41 @@ defmodule Wymcp.ToolTest do
           properties: %{},
           required: [],
           defaults: %{}
+        },
+        bare: %{
+          description: "Action with no required and no defaults",
+          properties: %{"x" => %{"type" => "string"}}
+        },
+        identify: %{
+          description: "Identify a widget by id or by (name + color)",
+          properties: %{
+            "id" => %{"type" => "integer"},
+            "name" => %{"type" => "string"},
+            "color" => %{"type" => "string"}
+          },
+          required_one_of: [["id"], ["name", "color"]]
+        },
+        locate: %{
+          description: "Locate at a path, identified by id or by (name + color)",
+          properties: %{
+            "path" => %{"type" => "string"},
+            "id" => %{"type" => "integer"},
+            "name" => %{"type" => "string"},
+            "color" => %{"type" => "string"}
+          },
+          required: ["path"],
+          required_one_of: [["id"], ["name", "color"]]
+        },
+        identify_with_default: %{
+          description:
+            "Identify by id or (name + color); :defaults seeds color but must NOT satisfy required_one_of",
+          properties: %{
+            "id" => %{"type" => "integer"},
+            "name" => %{"type" => "string"},
+            "color" => %{"type" => "string"}
+          },
+          required_one_of: [["id"], ["name", "color"]],
+          defaults: %{"color" => "blue"}
         }
       }
     end
@@ -74,6 +109,18 @@ defmodule Wymcp.ToolTest do
 
     @impl Wymcp.Tool
     def run_action(:failing_with_hints, _data, _ctx), do: {:error, {:not_found, 99}, %{id: 99}}
+
+    @impl Wymcp.Tool
+    def run_action(:bare, data, _ctx), do: {:ok, %{got: data}}
+
+    @impl Wymcp.Tool
+    def run_action(:identify, data, _ctx), do: {:ok, %{found: data}}
+
+    @impl Wymcp.Tool
+    def run_action(:locate, data, _ctx), do: {:ok, %{located: data}}
+
+    @impl Wymcp.Tool
+    def run_action(:identify_with_default, data, _ctx), do: {:ok, %{found: data}}
 
     @impl Wymcp.Tool
     def hints(:create, %{id: id}) do
@@ -237,7 +284,7 @@ defmodule Wymcp.ToolTest do
       assert defn["name"] == "widgets"
       assert defn["description"] == "Manage widgets"
       assert is_list(defn["inputSchema"]["oneOf"])
-      assert length(defn["inputSchema"]["oneOf"]) == 4
+      assert length(defn["inputSchema"]["oneOf"]) == length(Map.keys(WidgetTool.actions()))
     end
 
     test "slim mode definition has no oneOf in inputSchema" do
@@ -263,7 +310,7 @@ defmodule Wymcp.ToolTest do
            "Full mode does NOT inject help/describe into oneOf — keeps schema identical to before"
     test "full mode oneOf count matches declared actions only" do
       defn = WidgetTool.definition()
-      assert length(defn["inputSchema"]["oneOf"]) == 4
+      assert length(defn["inputSchema"]["oneOf"]) == length(Map.keys(WidgetTool.actions()))
     end
   end
 
@@ -334,6 +381,118 @@ defmodule Wymcp.ToolTest do
       result = WidgetTool.run(build_ctx(), %{})
       assert {:error, _} = result
     end
+
+    test "schema without :required and :defaults dispatches with empty defaults" do
+      result = WidgetTool.run(build_ctx(), %{"action" => "bare", "data" => %{}})
+      content = decode_json_content(result)
+      assert content["got"] == %{}
+    end
+
+    test "required_one_of: passes when first group is fully present" do
+      result = WidgetTool.run(build_ctx(), %{"action" => "identify", "data" => %{"id" => 1}})
+      assert {:ok, _} = result
+    end
+
+    test "required_one_of: passes when second group is fully present" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "identify",
+          "data" => %{"name" => "alpha", "color" => "red"}
+        })
+
+      assert {:ok, _} = result
+    end
+
+    test "required_one_of: fails with missing_required_group when no group is fully present" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "identify",
+          "data" => %{"name" => "alpha"}
+        })
+
+      content = decode_json_content(result)
+      assert content["error"] == "missing_required_group"
+      assert content["required_one_of"] == [["id"], ["name", "color"]]
+      assert content["message"] =~ "(id) OR (name + color)"
+    end
+
+    test "required_one_of: error response input_schema surfaces required_one_of" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "identify",
+          "data" => %{"name" => "alpha"}
+        })
+
+      content = decode_json_content(result)
+      assert content["input_schema"]["required_one_of"] == [["id"], ["name", "color"]]
+    end
+
+    test "required + required_one_of: passes when both satisfied" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "locate",
+          "data" => %{"path" => "/x", "id" => 1}
+        })
+
+      assert {:ok, _} = result
+    end
+
+    test "required + required_one_of: required failure surfaces required_one_of in input_schema" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "locate",
+          "data" => %{"id" => 1}
+        })
+
+      content = decode_json_content(result)
+      assert content["error"] == "missing_required_fields"
+      assert content["missing"] == ["path"]
+      assert content["input_schema"]["required_one_of"] == [["id"], ["name", "color"]]
+    end
+
+    test "required + required_one_of: required_one_of failure when required is satisfied" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "locate",
+          "data" => %{"path" => "/x"}
+        })
+
+      content = decode_json_content(result)
+      assert content["error"] == "missing_required_group"
+      assert content["required_one_of"] == [["id"], ["name", "color"]]
+    end
+
+    test "required + required_one_of: required loses race when both unsatisfied" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "locate",
+          "data" => %{}
+        })
+
+      content = decode_json_content(result)
+      assert content["error"] == "missing_required_fields"
+      assert content["missing"] == ["path"]
+    end
+
+    @tag doc: """
+    Pins design decision A1: `:defaults` is applied AFTER validation, so values
+    provided via `:defaults` cannot satisfy `:required_one_of`. The
+    `identify_with_default` fixture has `defaults: %{"color" => "blue"}` and
+    `required_one_of: [["id"], ["name", "color"]]`. Calling with only
+    `{"name": "alpha"}` would satisfy the second group IF defaults applied
+    pre-validation — they don't, so this must fail with `missing_required_group`.
+    """
+    test "defaults do not satisfy required_one_of" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "identify_with_default",
+          "data" => %{"name" => "alpha"}
+        })
+
+      content = decode_json_content(result)
+      assert content["error"] == "missing_required_group"
+      assert content["required_one_of"] == [["id"], ["name", "color"]]
+    end
   end
 
   describe "run/2 — error with hints" do
@@ -397,6 +556,38 @@ defmodule Wymcp.ToolTest do
       content = decode_json_content(result)
       assert is_map(content["actions"])
       refute is_error?(result)
+    end
+
+    test "help (no topic) includes required_one_of for actions that declare it" do
+      result = WidgetTool.run(build_ctx(), %{"action" => "help"})
+      content = decode_json_content(result)
+      identify = content["actions"]["identify"]
+
+      assert identify["required_one_of"] == [["id"], ["name", "color"]]
+      assert identify["required"] == []
+    end
+
+    test "help (no topic) omits required_one_of for actions that don't declare it" do
+      result = WidgetTool.run(build_ctx(), %{"action" => "help"})
+      content = decode_json_content(result)
+
+      refute Map.has_key?(content["actions"]["create"], "required_one_of")
+    end
+
+    test "help with topic surfaces required_one_of in slim schema" do
+      result =
+        WidgetTool.run(build_ctx(), %{"action" => "help", "data" => %{"topic" => "identify"}})
+
+      content = decode_json_content(result)
+      assert content["schema"]["required_one_of"] == [["id"], ["name", "color"]]
+    end
+
+    test "help with topic omits required_one_of when action doesn't declare it" do
+      result =
+        WidgetTool.run(build_ctx(), %{"action" => "help", "data" => %{"topic" => "create"}})
+
+      content = decode_json_content(result)
+      refute Map.has_key?(content["schema"], "required_one_of")
     end
   end
 
@@ -485,6 +676,39 @@ defmodule Wymcp.ToolTest do
       content = decode_json_content(result)
       assert content["action"] == "create"
       refute is_error?(result)
+    end
+
+    test "describe (no topic) includes required_one_of when declared" do
+      result = WidgetTool.run(build_ctx(), %{"action" => "describe"})
+      content = decode_json_content(result)
+
+      assert content["actions"]["identify"]["required_one_of"] == [
+               ["id"],
+               ["name", "color"]
+             ]
+    end
+
+    test "describe (no topic) omits required_one_of when not declared" do
+      result = WidgetTool.run(build_ctx(), %{"action" => "describe"})
+      content = decode_json_content(result)
+
+      refute Map.has_key?(content["actions"]["create"], "required_one_of")
+    end
+
+    test "describe with topic includes required_one_of when declared" do
+      result =
+        WidgetTool.run(build_ctx(), %{"action" => "describe", "data" => %{"topic" => "identify"}})
+
+      content = decode_json_content(result)
+      assert content["schema"]["required_one_of"] == [["id"], ["name", "color"]]
+    end
+
+    test "describe with topic omits required_one_of when not declared" do
+      result =
+        WidgetTool.run(build_ctx(), %{"action" => "describe", "data" => %{"topic" => "create"}})
+
+      content = decode_json_content(result)
+      refute Map.has_key?(content["schema"], "required_one_of")
     end
   end
 

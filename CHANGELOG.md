@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+**DATE:** 2026-05-08
+
+### Added
+
+- `Wymcp.Tool` action schemas may now omit `:required` and `:defaults`
+  entirely. Omitted is equivalent to `required: []` / `defaults: %{}`. The
+  `action_schema` type was tightened to document this and to declare
+  `:notes`, `:related`, and `:examples` as the optional fields they have
+  always been at the runtime level.
+
+  Bare action — `:required` and `:defaults` both omitted:
+
+      list: %{
+        description: "List things",
+        properties: %{"limit" => %{"type" => "integer"}}
+      }
+
+- `Wymcp.Tool` action schemas now support an optional `:required_one_of`
+  field for declaring OR-of-AND required-field groups. Each group is a list
+  of field names; at least one group must be fully present in `data`.
+  Combines with `:required` (both checks run, both must pass). Surfaces in
+  `help` and `describe` output and is rendered into `inputSchema` as
+  `anyOf` constraints on the action variant's `data`.
+
+  Example:
+
+      get_pull_request: %{
+        description: "Get pull request details",
+        properties: %{
+          "url" => %{"type" => "string"},
+          "project_key" => %{"type" => "string"},
+          "repo_slug" => %{"type" => "string"},
+          "pr_id" => %{"type" => "integer"}
+        },
+        required_one_of: [["url"], ["project_key", "repo_slug", "pr_id"]]
+      }
+
+- `Wymcp.Router.init/1` now validates the shape of every action schema in
+  every registered tool at boot via `Wymcp.Tool.validate_actions!/1`.
+  Misconfiguration (a `:required_one_of` group that isn't a list of
+  binaries, references a field not declared in `:properties`, is empty, is
+  a duplicate, or is a strict superset of another group) raises
+  `ArgumentError` immediately, surfacing the problem at startup rather
+  than at the first request. Boot-time validation also rejects bad
+  documentation-field shapes: `:notes` that isn't a binary, `:related`
+  that isn't a list of binaries, and `:examples` that isn't a list of
+  maps — so a typo like `notes: 123` fails fast instead of rendering
+  oddly in `describe` output.
+
+### Changed
+
+- The `:missing_required_fields` error response now uses `error:
+  "missing_required_group"` (with `required_one_of:` and a human-readable
+  `message:` payload) when the failure is on the new `:required_one_of`
+  constraint, distinguishing it from the existing `error:
+  "missing_required_fields"` (with `missing:`) used for `:required`. Both
+  error responses now expose the full schema summary (including
+  `:required_one_of` when declared) under `input_schema:` so clients see
+  every active constraint regardless of which one tripped.
+
 ## [0.4.1]
 
 **DATE:** 2026-05-05

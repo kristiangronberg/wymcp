@@ -89,8 +89,15 @@ defmodule Wymcp.Router do
   def init(opts) do
     tools = Keyword.get(opts, :tools, [])
     validate_unique_tool_names!(tools)
+    validate_action_schemas!(tools)
     validate_server_module(Keyword.get(opts, :server))
     super(opts)
+  end
+
+  @spec validate_action_schemas!([module()]) :: :ok
+  defp validate_action_schemas!(tools) do
+    Enum.each(tools, &Wymcp.Tool.validate_actions!/1)
+    :ok
   end
 
   @spec validate_unique_tool_names!([module()]) :: :ok
