@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+### Added
+
+- `strict_params?/0` optional `Wymcp.Tool` callback (defaults to `true`).
+
+### Changed
+
+- **BREAKING (default behavior):** `Wymcp.Tool.dispatch` now rejects data keys
+  not declared in an action's `:properties` by default (`strict_params?/0`
+  defaults to `true`), returning an `unknown_params` error instead of silently
+  ignoring them. Set `def strict_params?, do: false` per tool to restore the
+  permissive behavior. **Consumers upgrading to 0.6.0 must first audit their
+  tools** — confirm no action reads (directly, via a forwarded `data`/params
+  map, or `Map.get/3`) a key absent from that action's `:properties`; declare
+  any legitimate caller-facing key, and leave server-injected keys undeclared
+  (rejection-if-sent is the intended, more-secure outcome).
+
 ## [0.5.0]
 
 **DATE:** 2026-05-08

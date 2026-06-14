@@ -215,19 +215,8 @@ defmodule Wymcp.Session do
   @spec negotiated_version(Plug.Conn.t()) :: String.t()
   def negotiated_version(%Plug.Conn{} = conn) do
     case conn.assigns[:wymcp_session_pid] do
-      pid when is_pid(pid) ->
-        protocol_version(pid)
-
-      _ ->
-        case Plug.Conn.get_req_header(conn, "mcp-protocol-version") do
-          [version] ->
-            if ProtocolVersion.supported?(version),
-              do: version,
-              else: ProtocolVersion.latest()
-
-          _ ->
-            ProtocolVersion.latest()
-        end
+      pid when is_pid(pid) -> protocol_version(pid)
+      _ -> version_from_header(conn)
     end
   end
 
@@ -590,5 +579,20 @@ defmodule Wymcp.Session do
   @spec generate_session_id() :: String.t()
   defp generate_session_id do
     :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+  end
+
+  # -- Version negotiation --
+
+  @spec version_from_header(Plug.Conn.t()) :: String.t()
+  defp version_from_header(conn) do
+    case Plug.Conn.get_req_header(conn, "mcp-protocol-version") do
+      [version] ->
+        if ProtocolVersion.supported?(version),
+          do: version,
+          else: ProtocolVersion.latest()
+
+      _ ->
+        ProtocolVersion.latest()
+    end
   end
 end

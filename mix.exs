@@ -6,7 +6,7 @@ defmodule Wymcp.MixProject do
   def project do
     [
       app: :wymcp,
-      version: "0.5.0",
+      version: "0.6.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
@@ -47,6 +47,10 @@ defmodule Wymcp.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [precommit: :test]]
+  end
+
   defp package do
     [
       licenses: ["MIT"],
@@ -57,15 +61,27 @@ defmodule Wymcp.MixProject do
 
   defp aliases do
     [
-      "dialyzer.watch": fn _args -> Mix.Task.run("dialyzer", []) end
+      "dialyzer.watch": fn _args -> Mix.Task.run("dialyzer", []) end,
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "credo --strict",
+        "deps.audit",
+        "test --warnings-as-errors",
+        "dialyzer"
+      ]
     ]
   end
 
   defp deps do
     [
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
       {:jsv, "~> 0.16"},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
       {:plug, "~> 1.15"}
     ]

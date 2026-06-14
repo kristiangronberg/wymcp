@@ -18,6 +18,7 @@ defmodule Wymcp.Transport.StreamManagerTest do
   against a running server (out of scope for this unit test module).
   """
 
+  alias Wymcp.Transport.SSE
   alias Wymcp.Transport.StreamManager
 
   describe "start_link/1" do
@@ -73,7 +74,7 @@ defmodule Wymcp.Transport.StreamManagerTest do
          """
     test "SSE.encode produces valid event format" do
       message = %{"jsonrpc" => "2.0", "id" => 1, "method" => "sampling/createMessage"}
-      encoded = Wymcp.Transport.SSE.encode(message, "evt-1")
+      encoded = SSE.encode(message, "evt-1")
 
       assert encoded =~ "id: evt-1\n"
       assert encoded =~ "data: "

@@ -5,7 +5,8 @@ defmodule Wymcp.Tool do
   Each tool exposes multiple actions under a single tool name. The
   `use Wymcp.Tool` macro generates a spec-compliant `inputSchema` with
   `oneOf` variants from `actions/0`, handles dispatch via `run_action/2`,
-  validates required fields, applies defaults, injects hints, and formats
+  validates required fields, rejects unknown parameters (when
+  `strict_params?/0`), applies defaults, injects hints, and formats
   errors.
 
   ## Usage
@@ -119,6 +120,10 @@ defmodule Wymcp.Tool do
   - `schema_mode/0` — returns `:full` (default) or `:slim`. Slim mode emits a
     compact `tools/list` schema with action names and one-liners instead of full
     `oneOf` variants.
+  - `strict_params?/0` — returns `true` (default) or `false`. When `true`,
+    `dispatch` rejects any key in `data` not declared in the action's
+    `:properties`, returning an `unknown_params` error instead of silently
+    ignoring it. Set to `false` to preserve the permissive legacy behavior.
   - `action_context/2` — returns a map of runtime context for the given
     action, or `nil`. Receives `(action_atom, ctx)`, where `ctx` is the
     same `Wymcp.Context.t()` passed to `run_action/3`. Called during
@@ -192,10 +197,20 @@ defmodule Wymcp.Tool do
   @callback hints(action :: atom(), hint_context :: map()) :: [hint()]
   @callback handle_error(error :: term()) :: String.t()
   @callback schema_mode() :: :full | :slim
+  @callback strict_params?() :: boolean()
   @callback action_context(action :: atom(), ctx :: Wymcp.Context.t()) :: map() | nil
   @callback title() :: String.t() | nil
   @callback annotations() :: map() | nil
   @callback output_schema() :: map() | nil
+
+  @optional_callbacks hints: 2,
+                      handle_error: 1,
+                      schema_mode: 0,
+                      strict_params?: 0,
+                      action_context: 2,
+                      output_schema: 0,
+                      title: 0,
+                      annotations: 0
 
   # -- Macro --
 
@@ -212,6 +227,9 @@ defmodule Wymcp.Tool do
       @spec schema_mode() :: :full | :slim
       def schema_mode, do: :full
 
+      @spec strict_params?() :: boolean()
+      def strict_params?, do: true
+
       @spec action_context(atom(), Wymcp.Context.t()) :: map() | nil
       def action_context(_action, _ctx), do: nil
 
@@ -227,6 +245,7 @@ defmodule Wymcp.Tool do
       defoverridable hints: 2,
                      handle_error: 1,
                      schema_mode: 0,
+                     strict_params?: 0,
                      action_context: 2,
                      output_schema: 0,
                      title: 0,
@@ -241,6 +260,9 @@ defmodule Wymcp.Tool do
       @doc false
       @spec input_schema() :: map()
       def input_schema do
+        # Fully qualified by design: this is injected into the consumer's tool
+        # module, so an alias here would leak into their namespace (macro hygiene).
+        # credo:disable-for-next-line Credo.Check.Design.AliasUsage
         Wymcp.Tool.Schema.build(actions(), schema_mode())
       end
 
@@ -363,14 +385,7 @@ defmodule Wymcp.Tool do
                   ":required_one_of group has duplicate entries: #{inspect(group)}"
 
         true ->
-          unknown = Enum.reject(group, &Map.has_key?(properties, &1))
-
-          if unknown != [] do
-            raise ArgumentError,
-                  "Tool #{inspect(module)} action #{inspect(action)}: " <>
-                    ":required_one_of group references field(s) not declared " <>
-                    "in :properties: #{inspect(unknown)}"
-          end
+          validate_group_fields!(module, action, group, properties)
       end
     end)
 
@@ -384,23 +399,36 @@ defmodule Wymcp.Tool do
     :ok
   end
 
+  @spec validate_group_fields!(module(), atom(), [String.t()], map()) :: :ok
+  defp validate_group_fields!(module, action, group, properties) do
+    case Enum.reject(group, &Map.has_key?(properties, &1)) do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                ":required_one_of group references field(s) not declared " <>
+                "in :properties: #{inspect(unknown)}"
+    end
+  end
+
   @spec check_no_strict_superset!(module(), atom(), [[String.t()]]) :: :ok
   defp check_no_strict_superset!(module, action, groups) do
     indexed = groups |> Enum.map(&MapSet.new/1) |> Enum.with_index()
+    pairs = for {a, i} <- indexed, {b, j} <- indexed, i != j, do: {a, i, b, j}
 
-    Enum.each(indexed, fn {a, i} ->
-      Enum.each(indexed, fn {b, j} ->
-        if i != j and MapSet.subset?(a, b) and a != b do
-          raise ArgumentError,
-                "Tool #{inspect(module)} action #{inspect(action)}: " <>
-                  ":required_one_of group #{inspect(Enum.at(groups, j))} is a " <>
-                  "strict superset of #{inspect(Enum.at(groups, i))} (dead code: " <>
-                  "the smaller group always satisfies first)"
-        end
-      end)
-    end)
+    case Enum.find(pairs, fn {a, _i, b, _j} -> MapSet.subset?(a, b) and a != b end) do
+      nil ->
+        :ok
 
-    :ok
+      {_a, i, _b, j} ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                ":required_one_of group #{inspect(Enum.at(groups, j))} is a " <>
+                "strict superset of #{inspect(Enum.at(groups, i))} (dead code: " <>
+                "the smaller group always satisfies first)"
+    end
   end
 
   @spec validate_doc_fields!(module(), atom(), map()) :: :ok
@@ -475,11 +503,13 @@ defmodule Wymcp.Tool do
         {:ok, Context.json(action_summary(module, actions))}
 
       topic ->
-        with {:ok, action_atom, action, schema} <- fetch_action(actions, topic) do
-          response = %{action: action, schema: slim_action_schema(schema)}
-          {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
-        else
-          {:error, :unknown_action} -> {:error, "Unknown action: #{topic}"}
+        case fetch_action(actions, topic) do
+          {:ok, action_atom, action, schema} ->
+            response = %{action: action, schema: slim_action_schema(schema)}
+            {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
+
+          {:error, :unknown_action} ->
+            {:error, "Unknown action: #{topic}"}
         end
     end
   end
@@ -493,23 +523,25 @@ defmodule Wymcp.Tool do
         {:ok, Context.json(full_action_listing(module, actions))}
 
       topic ->
-        with {:ok, action_atom, action, schema} <- fetch_action(actions, topic) do
-          full =
-            Map.take(schema, [
-              :description,
-              :properties,
-              :required,
-              :required_one_of,
-              :defaults,
-              :notes,
-              :related,
-              :examples
-            ])
+        case fetch_action(actions, topic) do
+          {:ok, action_atom, action, schema} ->
+            full =
+              Map.take(schema, [
+                :description,
+                :properties,
+                :required,
+                :required_one_of,
+                :defaults,
+                :notes,
+                :related,
+                :examples
+              ])
 
-          response = %{action: action, schema: full}
-          {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
-        else
-          {:error, :unknown_action} -> {:error, "Unknown action: #{topic}"}
+            response = %{action: action, schema: full}
+            {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
+
+          {:error, :unknown_action} ->
+            {:error, "Unknown action: #{topic}"}
         end
     end
   end
@@ -522,7 +554,8 @@ defmodule Wymcp.Tool do
          schema = Map.fetch!(actions, action),
          :ok <- check_required(data, schema, action_str),
          :ok <- check_required_one_of(data, schema, action_str),
-         merged = apply_defaults(data, Map.get(schema, :defaults, %{})) do
+         :ok <- check_unknown_params(data, schema, action_str, module.strict_params?()) do
+      merged = apply_defaults(data, Map.get(schema, :defaults, %{}))
       handle_result(module, action, ctx, module.run_action(action, merged, ctx))
     else
       {:error, :unknown_action} ->
@@ -546,6 +579,19 @@ defmodule Wymcp.Tool do
              "At least one of these field groups must be fully present: " <>
                format_groups(groups),
            required_one_of: groups,
+           action: action_str,
+           input_schema: schema_summary(schema)
+         })}
+
+      {:error, {:unknown_params, unknown, action_str, schema}} ->
+        {:ok,
+         Context.json(%{
+           error: "unknown_params",
+           message:
+             "Unknown parameter(s) for action '#{action_str}': #{Enum.join(unknown, ", ")}. " <>
+               "These are rejected rather than silently ignored. " <>
+               "Use 'help' or 'describe' with this action to see valid parameters.",
+           unknown: unknown,
            action: action_str,
            input_schema: schema_summary(schema)
          })}
@@ -573,6 +619,19 @@ defmodule Wymcp.Tool do
       else: {:error, {:missing_required, missing, action_str, schema}}
   end
 
+  @spec check_unknown_params(map(), action_schema(), String.t(), boolean()) ::
+          :ok | {:error, {:unknown_params, [String.t()], String.t(), action_schema()}}
+  defp check_unknown_params(_data, _schema, _action_str, false), do: :ok
+
+  defp check_unknown_params(data, schema, action_str, true) do
+    allowed = schema |> Map.get(:properties, %{}) |> Map.keys() |> MapSet.new()
+    unknown = data |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
+
+    if unknown == [],
+      do: :ok,
+      else: {:error, {:unknown_params, Enum.sort(unknown), action_str, schema}}
+  end
+
   @spec check_required_one_of(map(), action_schema(), String.t()) ::
           :ok | {:error, tuple()}
   defp check_required_one_of(data, schema, action_str) do
@@ -581,9 +640,7 @@ defmodule Wymcp.Tool do
         :ok
 
       groups ->
-        if Enum.any?(groups, fn group ->
-             Enum.all?(group, &Map.has_key?(data, &1))
-           end) do
+        if Enum.any?(groups, &group_present?(&1, data)) do
           :ok
         else
           {:error, {:missing_required_groups, groups, action_str, schema}}
@@ -591,11 +648,12 @@ defmodule Wymcp.Tool do
     end
   end
 
+  @spec group_present?([String.t()], map()) :: boolean()
+  defp group_present?(group, data), do: Enum.all?(group, &Map.has_key?(data, &1))
+
   @spec format_groups([[String.t()]]) :: String.t()
   defp format_groups(groups) do
-    groups
-    |> Enum.map(fn group -> "(" <> Enum.join(group, " + ") <> ")" end)
-    |> Enum.join(" OR ")
+    Enum.map_join(groups, " OR ", fn group -> "(" <> Enum.join(group, " + ") <> ")" end)
   end
 
   @spec schema_summary(action_schema()) :: map()

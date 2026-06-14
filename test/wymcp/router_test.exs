@@ -1371,10 +1371,10 @@ defmodule Wymcp.RouterTest do
 
   describe "tools/list + tools/call with :required_one_of (end-to-end)" do
     @tag doc: """
-    Full mode advertises the constraint to clients via `anyOf` on the
-    variant's `data`. This is descriptive only — see the runtime test
-    below for enforcement.
-    """
+         Full mode advertises the constraint to clients via `anyOf` on the
+         variant's `data`. This is descriptive only — see the runtime test
+         below for enforcement.
+         """
     test "full mode: tools/list exposes anyOf for required_one_of" do
       session_id = initialize(tools: [OneOfTool])
 
@@ -1392,10 +1392,10 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-    Slim mode emits a bare `data: {type: "object"}`, so the constraint is
-    NOT advertised in the inputSchema. Clients learn about it via the
-    framework-provided `help`/`describe` actions.
-    """
+         Slim mode emits a bare `data: {type: "object"}`, so the constraint is
+         NOT advertised in the inputSchema. Clients learn about it via the
+         framework-provided `help`/`describe` actions.
+         """
     test "slim mode: tools/list omits anyOf (slim has no per-action constraints)" do
       session_id = initialize(tools: [SlimOneOfTool])
 
@@ -1409,12 +1409,12 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-    Full mode argument validation: a tools/call with no group satisfied is
-    rejected by `ToolsCall.validate_arguments/2` against the tool's
-    `inputSchema`, which encodes `required_one_of` as `anyOf` on the
-    variant's `data`. The response is a JSON-RPC error with code
-    -32602 (`invalid_params`).
-    """
+         Full mode argument validation: a tools/call with no group satisfied is
+         rejected by `ToolsCall.validate_arguments/2` against the tool's
+         `inputSchema`, which encodes `required_one_of` as `anyOf` on the
+         variant's `data`. The response is a JSON-RPC error with code
+         -32602 (`invalid_params`).
+         """
     test "full mode: tools/call with no group satisfied is rejected by inputSchema validation" do
       session_id = initialize(tools: [OneOfTool])
 
@@ -1435,10 +1435,10 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-    Slim mode runtime enforcement: same code path as full mode. The
-    constraint is invisible in `tools/list` but still enforced at
-    dispatch time, proving the runtime check is the sole enforcer.
-    """
+         Slim mode runtime enforcement: same code path as full mode. The
+         constraint is invisible in `tools/list` but still enforced at
+         dispatch time, proving the runtime check is the sole enforcer.
+         """
     test "slim mode: tools/call with no group satisfied returns missing_required_group" do
       session_id = initialize(tools: [SlimOneOfTool])
 

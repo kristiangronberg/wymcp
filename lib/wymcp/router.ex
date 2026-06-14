@@ -81,6 +81,7 @@ defmodule Wymcp.Router do
 
   alias Wymcp.Plugs.Pipeline
   alias Wymcp.Session
+  alias Wymcp.Transport.StreamManager
 
   plug(:match)
   plug(:dispatch)
@@ -153,7 +154,7 @@ defmodule Wymcp.Router do
               last_event_id: last_event_id
             }
 
-            case Wymcp.Transport.StreamManager.start_link(opts) do
+            case StreamManager.start_link(opts) do
               {:ok, stream_pid} ->
                 ref = Process.monitor(stream_pid)
 

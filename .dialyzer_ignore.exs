@@ -12,5 +12,5 @@
   # typing converges on the well-formed shape because every error
   # path raises, but the contract intentionally documents that
   # arbitrary input is accepted.
-  {"lib/wymcp/tool.ex", :contract_supertype, 339}
+  {"lib/wymcp/tool.ex", :contract_supertype, 361}
 ]

@@ -57,8 +57,8 @@ defmodule Wymcp.Transport.StreamManager do
 
   require Logger
 
-  alias Wymcp.Transport.Stream, as: SSEStream
   alias Wymcp.Session
+  alias Wymcp.Transport.Stream, as: SSEStream
 
   @default_keepalive_interval :timer.seconds(15)
 

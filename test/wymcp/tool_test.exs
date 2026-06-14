@@ -15,6 +15,11 @@ defmodule Wymcp.ToolTest do
   `{:ok, content}`, `{:ok, content, assigns}`, or `{:error, String.t()}` — it no
   longer touches Plug.Conn directly. The method handler in ToolsCall is responsible
   for building the HTTP response from the returned tuple.
+
+  When `strict_params?/0` is `true` (the default), `run/2` rejects any `data`
+  key absent from the action's `:properties`, returning an `unknown_params`
+  error instead of silently ignoring it. This is opt-out per tool via
+  `def strict_params?, do: false`.
   """
 
   alias Wymcp.Context
@@ -140,6 +145,29 @@ defmodule Wymcp.ToolTest do
 
     @impl Wymcp.Tool
     def handle_error({:not_found, id}), do: "Widget #{id} not found"
+  end
+
+  defmodule LenientTool do
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "lenient"
+
+    @impl true
+    def description, do: "Tolerates unknown params"
+
+    @impl true
+    def strict_params?, do: false
+
+    @impl true
+    def actions do
+      %{
+        bare: %{description: "Echo data", properties: %{"x" => %{"type" => "string"}}}
+      }
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:bare, data, _ctx), do: {:ok, %{got: data}}
   end
 
   defmodule TitledTool do
@@ -275,8 +303,8 @@ defmodule Wymcp.ToolTest do
   defp decode_json_content({:ok, [%{"type" => "text", "text" => text}], _}),
     do: JSON.decode!(text)
 
-  defp is_error?({:error, _}), do: true
-  defp is_error?({:ok, [%{"type" => "text", "text" => _}]}), do: false
+  defp error?({:error, _}), do: true
+  defp error?({:ok, [%{"type" => "text", "text" => _}]}), do: false
 
   describe "definition/0" do
     test "returns MCP tool definition with name, description, and oneOf schema" do
@@ -319,7 +347,7 @@ defmodule Wymcp.ToolTest do
       result = WidgetTool.run(build_ctx(), %{"action" => "create", "data" => %{"name" => "Bolt"}})
       content = decode_json_content(result)
       assert content["message"] == "Created Bolt"
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "applies schema defaults when data keys are absent" do
@@ -475,13 +503,13 @@ defmodule Wymcp.ToolTest do
     end
 
     @tag doc: """
-    Pins design decision A1: `:defaults` is applied AFTER validation, so values
-    provided via `:defaults` cannot satisfy `:required_one_of`. The
-    `identify_with_default` fixture has `defaults: %{"color" => "blue"}` and
-    `required_one_of: [["id"], ["name", "color"]]`. Calling with only
-    `{"name": "alpha"}` would satisfy the second group IF defaults applied
-    pre-validation — they don't, so this must fail with `missing_required_group`.
-    """
+         Pins design decision A1: `:defaults` is applied AFTER validation, so values
+         provided via `:defaults` cannot satisfy `:required_one_of`. The
+         `identify_with_default` fixture has `defaults: %{"color" => "blue"}` and
+         `required_one_of: [["id"], ["name", "color"]]`. Calling with only
+         `{"name": "alpha"}` would satisfy the second group IF defaults applied
+         pre-validation — they don't, so this must fail with `missing_required_group`.
+         """
     test "defaults do not satisfy required_one_of" do
       result =
         WidgetTool.run(build_ctx(), %{
@@ -529,7 +557,7 @@ defmodule Wymcp.ToolTest do
       assert Map.has_key?(content["actions"], "list")
       assert content["actions"]["create"]["description"] == "Create a widget"
       assert is_list(content["actions"]["create"]["required"])
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "help with topic returns slim schema for that action" do
@@ -541,7 +569,7 @@ defmodule Wymcp.ToolTest do
       assert content["schema"]["description"] == "Create a widget"
       assert content["schema"]["required"] == ["name"]
       assert content["schema"]["properties"]["name"] == %{"type" => "string"}
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "help with unknown topic returns error response" do
@@ -555,7 +583,7 @@ defmodule Wymcp.ToolTest do
       result = SlimWidgetTool.run(build_ctx(), %{"action" => "help"})
       content = decode_json_content(result)
       assert is_map(content["actions"])
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "help (no topic) includes required_one_of for actions that declare it" do
@@ -605,7 +633,7 @@ defmodule Wymcp.ToolTest do
       assert content["schema"]["required"] == ["name"]
       assert content["schema"]["defaults"] == %{"color" => "blue"}
       assert is_map(content["schema"]["properties"]["name"])
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "describe with no topic returns full schemas for every action" do
@@ -620,7 +648,7 @@ defmodule Wymcp.ToolTest do
       assert create["required"] == ["name"]
       assert create["defaults"] == %{"color" => "blue"}
       assert is_map(create["properties"]["name"])
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "describe with no topic differs from help with no topic" do
@@ -675,7 +703,7 @@ defmodule Wymcp.ToolTest do
 
       content = decode_json_content(result)
       assert content["action"] == "create"
-      refute is_error?(result)
+      refute error?(result)
     end
 
     test "describe (no topic) includes required_one_of when declared" do
@@ -801,6 +829,51 @@ defmodule Wymcp.ToolTest do
 
     test "omits annotations from definition when not implemented" do
       refute Map.has_key?(WidgetTool.definition(), "annotations")
+    end
+  end
+
+  describe "strict_params?/0" do
+    test "defaults to true" do
+      assert WidgetTool.strict_params?() == true
+    end
+
+    test "tool may override to false" do
+      assert LenientTool.strict_params?() == false
+    end
+  end
+
+  describe "run/2 — unknown params" do
+    test "rejects a data key not declared in the action's properties" do
+      result =
+        WidgetTool.run(build_ctx(), %{
+          "action" => "bare",
+          "data" => %{"x" => "ok", "bogus" => 1}
+        })
+
+      content = decode_json_content(result)
+      assert content["error"] == "unknown_params"
+      assert content["unknown"] == ["bogus"]
+      assert content["action"] == "bare"
+    end
+
+    test "accepts data with only declared keys" do
+      result =
+        WidgetTool.run(build_ctx(), %{"action" => "bare", "data" => %{"x" => "ok"}})
+
+      content = decode_json_content(result)
+      assert content["got"] == %{"x" => "ok"}
+      refute error?(result)
+    end
+
+    test "lenient tool passes unknown keys through" do
+      result =
+        LenientTool.run(build_ctx(), %{
+          "action" => "bare",
+          "data" => %{"x" => "ok", "bogus" => 1}
+        })
+
+      content = decode_json_content(result)
+      assert content["got"] == %{"x" => "ok", "bogus" => 1}
     end
   end
 end

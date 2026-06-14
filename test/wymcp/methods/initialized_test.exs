@@ -13,6 +13,7 @@ defmodule Wymcp.Methods.InitializedTest do
   import Plug.Test
   import Plug.Conn
 
+  alias Wymcp.Methods.Initialized
   alias Wymcp.Session
 
   test "returns empty response for initialized notification" do
@@ -33,7 +34,7 @@ defmodule Wymcp.Methods.InitializedTest do
       })
       |> assign(:wymcp_session_pid, pid)
 
-    result = Wymcp.Methods.Initialized.run(conn)
+    result = Initialized.run(conn)
     body = JSON.decode!(result.resp_body)
 
     assert body == %{}

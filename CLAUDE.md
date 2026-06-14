@@ -5,15 +5,29 @@ This file provides guidance when working with code in this repository.
 ## Commands
 
 ```sh
+mix precommit                               # full gate before commit (see below)
 mix test                                    # run full suite
 mix test test/wymcp/router_test.exs         # run one file
 mix test test/wymcp/router_test.exs:42      # run one test by line
 mix test --only describe:"tools/call"       # run by describe tag
 mix compile --warnings-as-errors            # check for warnings
 mix format                                  # format code (imports Plug conventions)
+mix credo --strict                          # lint (Credo + ex_slop checks)
+mix deps.audit                              # scan mix.lock for known CVEs
 mix test.watch                              # auto-run on file change (dev)
 mix dialyzer                                # static type analysis
 ```
+
+`mix precommit` is the all-or-nothing gate run before committing. It chains
+(in the `:test` env): `compile --warnings-as-errors`, `deps.unlock --unused`,
+`format`, `credo --strict`, `deps.audit`, `test --warnings-as-errors`,
+`dialyzer`. Run it and get a green exit before committing. (CI should swap `format` → `format
+--check-formatted` so unformatted code fails instead of being silently
+rewritten.)
+
+Static-analysis tooling is configured in `.credo.exs` (Credo + ex_slop, with
+two domain-appropriate tunings noted inline) and `.dialyzer_ignore.exs`. The
+rationale and rollout are documented in `docs/coding_tool_setup.md`.
 
 ## Architecture
 
