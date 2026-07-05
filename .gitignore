@@ -22,6 +22,3 @@ erl_crash.dump
 
 # Ignore package tarball (built via "mix hex.build").
 wymcp-*.tar
-
-# Ignore some docs, iex.exs and CLAUDE.md for now
-/docs/implemented/
