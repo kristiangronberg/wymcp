@@ -128,14 +128,14 @@ end collect the synonym sets that span entries.
 Terms the roadmap and spec overview use for planned work — present in
 priv/schema.json, absent from lib/:
 
-- **resources** — application-driven context (`resources/list`, `resources/read`); planned. (docs/roadmap.md, spec overview §2.2)
+- **resources** — application-driven context (`resources/list`, `resources/read`); planned. (roadmap, spec overview §2.2)
 - **resource template** — URI-template-based resources (`resources/templates/list`); planned. (spec overview §2.2)
-- **prompts** — user-controlled templates (`prompts/list`, `prompts/get`); planned. (docs/roadmap.md, spec overview §2.3)
-- **tasks** — experimental durable state machines for long-running operations; statuses working / input_required / completed / failed / cancelled (the `status` overload). (docs/roadmap.md, spec overview §4.7)
+- **prompts** — user-controlled templates (`prompts/list`, `prompts/get`); planned. (roadmap, spec overview §2.3)
+- **tasks** — experimental durable state machines for long-running operations; statuses working / input_required / completed / failed / cancelled (the `status` overload). (roadmap, spec overview §4.7)
 - **roots** — client-declared filesystem boundaries (`roots/list`). (spec overview §3.3)
 - **completion** — argument autocompletion (`completion/complete`). (spec overview §4.5)
-- **pagination / cursor** — opaque cursor-based paging on list methods (`nextCursor`). (docs/roadmap.md, spec overview §4.6)
-- **resource link / embedded resource** — resource-referencing content block types. (docs/roadmap.md, spec overview §2.1)
+- **pagination / cursor** — opaque cursor-based paging on list methods (`nextCursor`). (roadmap, spec overview §4.6)
+- **resource link / embedded resource** — resource-referencing content block types. (roadmap, spec overview §2.1)
 - **URL-mode elicitation** — elicitation via an external URL (`elicitation.url`, `URLElicitationRequiredError` -32042); deferred. (spec overview §3.2)
 
 ### Cross-cutting flags

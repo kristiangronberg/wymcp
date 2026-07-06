@@ -52,22 +52,13 @@ POST /
 
 ## Documentation
 
-- **`docs/roadmap.md`** is the planning center: one row per topic with its
-  status and a link to the topic's directory. A row set to `implemented` is
-  the topic's completion record.
-- **Topic folders**: every development-process topic lives in
-  `docs/plans/YYYY-MM-DD-<topic>/`, holding its phase artifacts under
-  phase-predictable names (`brainstorm.md`, `survey.md`, `spec.md`,
-  `plan.md`, `learning.md`, …). Nothing moves once created. The whole
-  `docs/plans/` tree is gitignored — planning records are internal and stay
-  out of the published repo.
+- **Development-process records** (topic plans, roadmap) are kept outside
+  this repository.
 - **Standing reference docs** (single home for one cross-cutting concern):
   `docs/mcp-spec-2025-11-25-overview.md` — the MCP 2025-11-25 spec
   reference.
-- **No-stale rule**: only the point-in-time records under
-  `docs/plans/*/plan.md` may go stale; every other doc (README, this file,
-  the roadmap, standing docs) must be kept current by the change that
-  affects it.
+- **No-stale rule**: keep every doc current or remove it; the change that
+  affects a doc (README, this file, standing docs) updates it.
 
 ## Code Conventions
 
