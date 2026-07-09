@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+### Added
+
+- `:www_authenticate` router option — keyword list of RFC 6750 auth-params
+  appended to the `Bearer` challenge in the 401 `WWW-Authenticate` header
+  (e.g. an RFC 9728 `resource_metadata` pointer and a `scope` hint, completing
+  the OAuth discovery chain for spec-following MCP clients such as mcp-remote).
+  Values are strings or `{module, function, args}` tuples resolved per request.
+  Without the option the challenge stays bare `Bearer` — existing consumers
+  are unaffected. If rendering an entry raises (e.g. a misconfigured MFA), the
+  challenge degrades to bare `Bearer` for that request and an error is logged
+  — the 401 contract survives misconfiguration.
+
 ## [0.6.0]
 
 ### Added

@@ -13,6 +13,16 @@ defmodule Wymcp.Router do
         tools: [MyApp.Tools.Events, MyApp.Tools.Tasks],
         auth: MyApp.McpAuth
 
+  ## With OAuth discovery hints on the 401 challenge
+
+      forward "/mcp", Wymcp.Router,
+        tools: [MyApp.Tools.Events, MyApp.Tools.Tasks],
+        auth: MyApp.McpAuth,
+        www_authenticate: [
+          resource_metadata: {MyAppWeb.Endpoint, :url, []},
+          scope: "mcp"
+        ]
+
   ## With origin allowlist (DNS rebinding protection)
 
       forward "/mcp", Wymcp.Router,
@@ -41,6 +51,17 @@ defmodule Wymcp.Router do
   - `:tools` — list of modules implementing the `Wymcp.Tool` behaviour (required)
   - `:auth` — module implementing the `Wymcp.Auth` behaviour (optional, defaults
     to `Wymcp.Auth.Noop`)
+  - `:www_authenticate` — keyword list of RFC 6750 auth-params appended to the
+    `Bearer` challenge in the 401 `WWW-Authenticate` header (optional; when
+    absent the challenge is bare `Bearer`). Each `{key, value}` renders as
+    `key="value"` with quoted-string escaping. A value may be a
+    `{module, function, args}` tuple resolved per request — use this when the
+    value is only known at runtime (e.g. a public URL from runtime config),
+    since forward options are evaluated at compile time. Typical MCP use: an
+    RFC 9728 `resource_metadata` pointer and a `scope` hint. If rendering an
+    entry raises (e.g. a misconfigured MFA), the challenge degrades to bare
+    `Bearer` for that request and an error naming this option is logged — the
+    401 contract survives misconfiguration.
   - `:server` — module implementing the `Wymcp.Server` behaviour for session
     lifecycle hooks (optional, defaults to `nil`)
   - `:origin` — list of allowed Origin header values for DNS rebinding protection
@@ -86,12 +107,12 @@ defmodule Wymcp.Router do
   plug(:match)
   plug(:dispatch)
 
-  @spec init(keyword()) :: keyword()
   def init(opts) do
     tools = Keyword.get(opts, :tools, [])
     validate_unique_tool_names!(tools)
     validate_action_schemas!(tools)
     validate_server_module(Keyword.get(opts, :server))
+    validate_www_authenticate!(Keyword.get(opts, :www_authenticate, []))
     super(opts)
   end
 
@@ -114,6 +135,28 @@ defmodule Wymcp.Router do
               "Duplicate tool name #{inspect(hd(duplicates))} found in Wymcp.Router tools list. " <>
                 "Each tool must have a unique name."
     end
+  end
+
+  defp validate_www_authenticate!(params) when is_list(params) do
+    Enum.each(params, fn
+      {key, value} when is_atom(key) and is_binary(value) ->
+        :ok
+
+      {key, {m, f, a}} when is_atom(key) and is_atom(m) and is_atom(f) and is_list(a) ->
+        :ok
+
+      entry ->
+        raise ArgumentError,
+              "invalid :www_authenticate entry #{inspect(entry)} — " <>
+                "expected {atom, binary} or {atom, {module, function, args}}"
+    end)
+
+    :ok
+  end
+
+  defp validate_www_authenticate!(other) do
+    raise ArgumentError,
+          "invalid :www_authenticate option #{inspect(other)} — expected a keyword list"
   end
 
   @spec validate_server_module(module() | nil) :: :ok

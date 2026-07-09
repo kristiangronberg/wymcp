@@ -37,7 +37,7 @@ defmodule Wymcp.Auth do
   ## MCP specification notes
 
   Per the MCP 2025-11-25 spec, servers that require authentication MUST return
-  401 with a `WWW-Authenticate: Bearer` header when the token is missing or
+  401 with a `WWW-Authenticate: Bearer` challenge when the token is missing or
   invalid. The `Wymcp.Plugs.Auth` plug handles this response format automatically
   when `c:authenticate/1` returns `{:error, _}`.
 

@@ -761,6 +761,47 @@ defmodule Wymcp.RouterTest do
       assert conn.status == 401
       assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
     end
+
+    @tag doc: """
+         Proves the :www_authenticate forward option flows through Router.init →
+         copy_opts_to_assign → the auth plug. Failure means the option is stripped
+         or renamed in the router plumbing even while the plug unit tests pass.
+         """
+    test "401 WWW-Authenticate carries configured auth-params" do
+      body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
+
+      conn =
+        call_router(body,
+          auth: FailAuth,
+          www_authenticate: [resource_metadata: "https://example.com/prm", scope: "mcp"]
+        )
+
+      assert conn.status == 401
+
+      assert get_resp_header(conn, "www-authenticate") ==
+               [~s(Bearer resource_metadata="https://example.com/prm", scope="mcp")]
+    end
+  end
+
+  describe "init/1 :www_authenticate validation" do
+    test "raises when the option is not a keyword list" do
+      assert_raise ArgumentError, ~r/www_authenticate/, fn ->
+        Wymcp.Router.init(tools: [TestTool], www_authenticate: "Bearer foo")
+      end
+    end
+
+    test "raises on a value that is neither a binary nor an MFA tuple" do
+      assert_raise ArgumentError, ~r/www_authenticate/, fn ->
+        Wymcp.Router.init(tools: [TestTool], www_authenticate: [resource_metadata: 123])
+      end
+    end
+
+    test "accepts binary and MFA values" do
+      assert Wymcp.Router.init(
+               tools: [TestTool],
+               www_authenticate: [resource_metadata: {SomeApp.Endpoint, :url, []}, scope: "mcp"]
+             )
+    end
   end
 
   describe "GET (SSE listener)" do

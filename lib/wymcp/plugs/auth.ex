@@ -6,10 +6,15 @@ defmodule Wymcp.Plugs.Auth do
   and calls its `c:Wymcp.Auth.authenticate/1` callback. When no auth
   module is configured, defaults to `Wymcp.Auth.Noop` (pass-through).
 
-  On authentication failure, returns HTTP 401 with a
-  `WWW-Authenticate: Bearer` header as required by the MCP 2025-11-25
-  specification. The response body is a JSON-RPC error with code
-  -32600 (Invalid Request).
+  On authentication failure, returns HTTP 401 with a `WWW-Authenticate`
+  challenge as required by the MCP 2025-11-25 specification. By default the
+  challenge is bare `Bearer`; consumers may append RFC 6750 auth-params (an
+  RFC 9728 `resource_metadata` pointer, a `scope` hint) via the router's
+  `:www_authenticate` option — see `Wymcp.Router`. If rendering the configured
+  params raises (e.g. a misconfigured MFA), the challenge degrades to bare
+  `Bearer` for that request and the error is logged naming the option — the
+  401 contract survives misconfiguration. The response body is a JSON-RPC
+  error with code -32600 (Invalid Request).
 
   ## Observability
 
@@ -112,16 +117,56 @@ defmodule Wymcp.Plugs.Auth do
     :ok
   end
 
-  @spec send_unauthorized(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   defp send_unauthorized(conn, reason) do
     request_id = request_field(conn, "id")
     data = %{error: reason}
     response = JsonRpc.error_response(:invalid_request, request_id, data)
 
     conn
-    |> put_resp_header("www-authenticate", "Bearer")
+    |> put_resp_header("www-authenticate", www_authenticate_value(conn))
     |> put_status(401)
     |> send_json(response)
+  end
+
+  # Bare `Bearer` unless the consumer configured auth-params via the router's
+  # :www_authenticate option (see Wymcp.Router). MFA values are resolved per
+  # request because consumers may only know them at runtime (Phoenix forward
+  # options are evaluated at compile time).
+  #
+  # Rendering is total: send_unauthorized/2 is called from inside
+  # do_authenticate/2's rescue, so a raising entry (a typo'd MFA past the
+  # shape-only init validation, or an MFA returning a non-binary) would
+  # otherwise escape as a 500 on every unauthenticated request — and the first
+  # raise would emit [:wymcp, :auth, :error], misattributing the crash to the
+  # auth module. On rescue the WHOLE header degrades to bare "Bearer" (never a
+  # partial param list — a scope hint without the resource_metadata pointer is
+  # a misleading half-challenge), with an error log naming the real owner.
+  defp www_authenticate_value(conn) do
+    case get_in(conn.assigns, [:wymcp, :www_authenticate]) || [] do
+      [] -> "Bearer"
+      params -> "Bearer " <> Enum.map_join(params, ", ", &auth_param/1)
+    end
+  rescue
+    e ->
+      Logger.error(
+        "MCP :www_authenticate option failed to render; sending bare Bearer challenge: " <>
+          Exception.message(e),
+        www_authenticate: inspect(get_in(conn.assigns, [:wymcp, :www_authenticate])),
+        crash_reason: {e, __STACKTRACE__}
+      )
+
+      "Bearer"
+  end
+
+  defp auth_param({key, {m, f, a}}), do: auth_param({key, apply(m, f, a)})
+
+  defp auth_param({key, value}) when is_binary(value) do
+    escaped =
+      value
+      |> String.replace("\\", "\\\\")
+      |> String.replace("\"", "\\\"")
+
+    ~s(#{key}="#{escaped}")
   end
 
   @spec request_field(Plug.Conn.t(), String.t()) :: term() | nil

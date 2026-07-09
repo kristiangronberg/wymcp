@@ -234,7 +234,22 @@ forward "/mcp", Wymcp.Router,
 ```
 
 When authentication fails, Wymcp returns HTTP 401 with a `WWW-Authenticate: Bearer`
-header per the MCP 2025-11-25 specification.
+challenge per the MCP 2025-11-25 specification. To complete the OAuth discovery
+chain for spec-following clients, append RFC 6750 auth-params — an RFC 9728
+`resource_metadata` pointer and a `scope` hint — via the `:www_authenticate`
+option:
+
+```elixir
+forward "/mcp", Wymcp.Router,
+  tools: [MyApp.Tools.Calculator],
+  auth: MyApp.McpAuth,
+  www_authenticate: [
+    resource_metadata: {MyAppWeb.Endpoint, :url, []},
+    scope: "mcp"
+  ]
+```
+
+Values are strings or `{module, function, args}` tuples resolved per request.
 
 ## Architecture
 
