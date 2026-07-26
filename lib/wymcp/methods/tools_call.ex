@@ -47,31 +47,39 @@ defmodule Wymcp.Methods.ToolsCall do
     with {:ok, tool} <- get_tool(tools, name),
          :ok <- validate_arguments(tool, arguments) do
       ctx = build_context(conn)
+      action = arguments["action"]
       start_time = System.monotonic_time()
-      Wymcp.Telemetry.emit(:tool, :start, %{}, %{tool_name: name, session_id: ctx.session_id})
+
+      Wymcp.Telemetry.emit(:tool, :start, %{}, %{
+        tool_name: name,
+        action: action,
+        session_id: ctx.session_id
+      })
 
       try do
-        result =
+        {content, is_error} =
           case tool.run(ctx, arguments) do
             {:ok, content} ->
-              send_tool_result(conn, request, tool, content, false)
+              {content, false}
 
             {:ok, content, assigns_updates} when is_map(assigns_updates) ->
               persist_assigns(conn, assigns_updates)
-              send_tool_result(conn, request, tool, content, false)
+              {content, false}
 
             {:error, message} ->
-              send_tool_result(
-                conn,
-                request,
-                tool,
-                [%{"type" => "text", "text" => message}],
-                true
-              )
+              {[%{"type" => "text", "text" => message}], true}
           end
 
+        result = send_tool_result(conn, request, tool, content, is_error)
         duration = System.monotonic_time() - start_time
-        Wymcp.Telemetry.emit(:tool, :stop, %{duration: duration}, %{tool_name: name})
+
+        Wymcp.Telemetry.emit(:tool, :stop, %{duration: duration}, %{
+          tool_name: name,
+          action: action,
+          session_id: ctx.session_id,
+          is_error: is_error
+        })
+
         result
       rescue
         e ->
@@ -79,6 +87,7 @@ defmodule Wymcp.Methods.ToolsCall do
 
           Wymcp.Telemetry.emit(:tool, :error, %{duration: duration}, %{
             tool_name: name,
+            action: action,
             session_id: ctx.session_id,
             request_id: request["id"],
             exception: inspect(e.__struct__),

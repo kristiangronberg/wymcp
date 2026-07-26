@@ -89,6 +89,27 @@ defmodule Wymcp.Methods.ToolsCallTest do
     def run_action(:crash, _data, _ctx), do: raise("boom")
   end
 
+  defmodule ErroringTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    def name, do: "erroring"
+    def description, do: "Always returns a tool-level error"
+
+    def actions do
+      %{
+        fail: %{
+          description: "Returns an error tuple",
+          properties: %{},
+          required: [],
+          defaults: %{}
+        }
+      }
+    end
+
+    def run_action(:fail, _data, _ctx), do: {:error, "nope"}
+  end
+
   defp build_conn(method, params, tools \\ []) do
     body = %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}
 
@@ -343,6 +364,111 @@ defmodule Wymcp.Methods.ToolsCallTest do
       content = hd(body["result"]["content"])["text"] |> JSON.decode!()
       # Session value wins over conn value
       assert content["scope"] == %{"user" => "from_session"}
+    end
+  end
+
+  describe "tool telemetry" do
+    test "stop event carries action, session_id, and is_error: false on success" do
+      ref = make_ref()
+      handler_id = "tool-stop-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :tool, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{
+              "name" => "echo",
+              "arguments" => %{"action" => "echo", "data" => %{"text" => "hi"}}
+            },
+            [EchoTool]
+          )
+
+        session_id = conn.assigns[:wymcp_session_id]
+        ToolsCall.run(conn, [EchoTool])
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.tool_name == "echo"
+        assert metadata.action == "echo"
+        assert metadata.session_id == session_id
+        assert metadata.is_error == false
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "stop event carries is_error: true when the tool returns an error result" do
+      ref = make_ref()
+      handler_id = "tool-stop-error-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :tool, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{"name" => "erroring", "arguments" => %{"action" => "fail"}},
+            [ErroringTool]
+          )
+
+        ToolsCall.run(conn, [ErroringTool])
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.action == "fail"
+        assert metadata.is_error == true
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    @tag :capture_log
+    test "start and error events carry the action" do
+      ref = make_ref()
+      handler_id = "tool-start-error-#{inspect(ref)}"
+
+      :telemetry.attach_many(
+        handler_id,
+        [[:wymcp, :tool, :start], [:wymcp, :tool, :error]],
+        fn event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, event, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{"name" => "crasher", "arguments" => %{"action" => "crash"}},
+            [CrashingTool]
+          )
+
+        ToolsCall.run(conn, [CrashingTool])
+
+        assert_received {:telemetry, ^ref, [:wymcp, :tool, :start], start_meta}
+        assert start_meta.action == "crash"
+
+        assert_received {:telemetry, ^ref, [:wymcp, :tool, :error], error_meta}
+        assert error_meta.action == "crash"
+        assert error_meta.tool_name == "crasher"
+      after
+        :telemetry.detach(handler_id)
+      end
     end
   end
 end

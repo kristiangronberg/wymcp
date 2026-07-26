@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1]
+
+### Changed
+
+- Tool telemetry now identifies the action: `[:wymcp, :tool, :start]`,
+  `:stop`, and `:error` metadata gains `action` (the raw `"action"` string
+  from the call arguments, `nil` when absent); `:stop` additionally gains the
+  `session_id` its documented contract always promised, plus `is_error`
+  (whether the tool returned an error result). Additive — existing handlers
+  are unaffected. See `Wymcp.Telemetry` for the full metadata shapes.
+
 ## [0.7.0]
 
 ### Added

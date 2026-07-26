@@ -23,16 +23,24 @@ defmodule Wymcp.Telemetry do
 
   * `[:wymcp, :tool, :start]` — tool execution starting
     - Measurements: `%{system_time: integer()}`
-    - Metadata: `%{tool_name: String.t(), session_id: String.t() | nil}`
+    - Metadata: `%{tool_name: String.t(), action: String.t() | nil,
+      session_id: String.t() | nil}`
 
   * `[:wymcp, :tool, :stop]` — tool execution completed
     - Measurements: `%{duration: integer()}` (native time units)
-    - Metadata: `%{tool_name: String.t(), session_id: String.t() | nil}`
+    - Metadata: `%{tool_name: String.t(), action: String.t() | nil,
+      session_id: String.t() | nil, is_error: boolean()}`
 
   * `[:wymcp, :tool, :error]` — tool raised an exception
     - Measurements: `%{duration: integer()}`
-    - Metadata: `%{tool_name: String.t(), session_id: String.t() | nil,
-      request_id: term(), exception: String.t(), error: String.t()}`
+    - Metadata: `%{tool_name: String.t(), action: String.t() | nil,
+      session_id: String.t() | nil, request_id: term(),
+      exception: String.t(), error: String.t()}`
+
+  For tool events, `action` is the raw `"action"` string from the call
+  arguments — what the client actually sent, including `"help"` and
+  `"describe"` — or `nil` when the arguments carried none. `is_error`
+  mirrors the MCP result's `isError` flag for tool-returned errors.
 
   * `[:wymcp, :auth, :reject]` — auth module returned `{:error, reason}`
     - Measurements: `%{system_time: integer()}`
