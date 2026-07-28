@@ -1,8 +1,39 @@
 # Glossary
 
 Canonical domain terms for this project. Code and docs use these terms;
-`_Avoid_` synonyms are banned in new names. Definitions live only here —
-other documents point here instead of redefining.
+`_Avoid_` synonyms are banned in new names. Conceptual terms are defined
+here; code-backed terms are defined at their code home and autolinked from
+here. Other documents point at a term's home instead of redefining it.
+
+**action**
+A named operation within a tool, selected by the `"action"` key in a call's
+arguments; atom internally, string on the wire. The narrowing key also
+holds an action name — a reference to this concept, not a second meaning.
+The elicitation-response `"action"` field (accept/decline/cancel) is an
+unrelated, spec-fixed wire collision.
+
+**built-in action**
+An introspection action the framework injects into every tool's action
+set — `help` and `describe`. Ordinary in dispatch, listings, and schema
+generation; always strict about unknown `data` keys, regardless of the
+tool's strict-params setting.
+_Avoid_: framework action, injected action
+
+**describe**
+The built-in action for contextual introspection — "what to know": full
+schemas with notes, related actions, and examples, for the whole tool or
+one narrowed action.
+
+**help**
+The built-in action for operational introspection — "how to call": terse
+action summaries for the whole tool, or one action's slim schema when
+narrowed.
+
+**narrowing**
+Restricting a `help`/`describe` call to a single action, named by the
+`action` key in `data`. A narrowed call returns that action's schema
+alone; an un-narrowed call returns the full catalog.
+_Avoid_: topic, filtering
 
 ## Grandfathered (pending define)
 
@@ -16,7 +47,6 @@ end collect the synonym sets that span entries.
 ### Tools & actions
 
 - **tool** — a module implementing the `Wymcp.Tool` behaviour, exposing named actions to LLM clients; the only MCP primitive wymcp implements. **Overloaded:** also a string tool *name* (`Hint.tool`), a capability flag (`capabilities.tools`), and a sampling tool definition (`CreateMessageRequestParams.tools`). (`Wymcp.Tool`, README)
-- **action** — a named operation within a tool, selected by the `"action"` param; atom internally, string on the wire. **Overloaded:** also the elicitation-response field `"action"` (values accept/decline/cancel) — same JSON key, unrelated semantics. (`Wymcp.Tool`, README §2)
 - **action-dispatched pattern** — the design idiom where one tool name multiplexes many actions. (`Wymcp.Tool` moduledoc)
 - **action schema** — the per-action definition map: `:description`, `:properties`, `:required`, `:required_one_of`, `:defaults`, `:notes`, `:related`, `:examples`. (`Wymcp.Tool` `@type action_schema`)
 - **data** — the action-specific parameter sub-object inside a call's `arguments`. (`Wymcp.Tool`, `Wymcp.Tool.Schema`)
@@ -34,9 +64,6 @@ end collect the synonym sets that span entries.
 - **schema mode** (`:full` / `:slim`) — whether `tools/list` emits the full `oneOf` schema or the slim schema. (`Wymcp.Tool`, README §2b)
 - **slim schema** — compact input schema: action enum + one-line descriptions, ~7× smaller `tools/list` payload. (`Wymcp.Tool.Schema`)
 - **oneOf variant** — the per-action discriminated schema branch in full mode, const-tagged on `action`. (`Wymcp.Tool.Schema`)
-- **help** — built-in introspection action: terse action summaries, or the slim schema for one topic; operational — "how to call". (`Wymcp.Tool`, README §2b)
-- **describe** — built-in introspection action: full schema plus notes/examples/patterns; contextual — "what to know". (`Wymcp.Tool`, README §2b)
-- **topic** (help/describe argument) — the single action to detail. Collides with the development-process "topic" in the roadmap (excluded from this glossary). (`Wymcp.Tool.dispatch`)
 - **annotations** — optional tool metadata (readOnlyHint, destructiveHint, idempotentHint, openWorldHint). **Overloaded:** the protocol schema also has `Annotations` for *content* metadata (audience, priority, lastModified) — two different definitions. (`Wymcp.Tool`, priv/schema.json)
 - **title** — human-readable display name for a tool or the server; version-gated to ≥ 2025-06-18. (`Wymcp.Tool`, `Wymcp.ProtocolVersion`)
 - **isError** — flag marking a `tools/call` result as a tool-originated error, returned as a *successful* JSON-RPC response with error content so the LLM can self-correct. (`Wymcp.Methods.ToolsCall`, CHANGELOG 0.3.0)
@@ -145,7 +172,6 @@ define sessions:
 
 - **context ×3** — `%Wymcp.Context{}` struct vs the `"context"` response key vs hint context.
 - **hint ×3** — follow-up action suggestion vs `ModelHint` vs `ToolAnnotations.*Hint`.
-- **action ×2** — tool operation vs elicitation-response outcome field.
 - **dispatch ×3** — action-level vs method-level vs `Plug.Router` internals.
 - **server ×3** — MCP server / `Wymcp.Server` behaviour / server-initiated requests.
 - **status ×2** — session lifecycle vs task execution state machine.
@@ -156,5 +182,4 @@ define sessions:
 - **negotiated version ≈ protocol version ≈ revision ≈ protocolVersion** — one concept, four spellings across resolver, state, prose, and wire.
 - **session assigns ≈ per-session state ≈ per-session assigns** — one concept in prose.
 - **push_event ≈ push** — Session vs StreamManager naming of the same send.
-- **help vs describe** — a deliberate dyad (operational vs contextual), easy to conflate.
 - **camelCase ↔ snake_case** — wire vs Elixir spellings of the same fields (inputSchema/input_schema, serverInfo/server_info, `_meta`/meta, Mcp-Session-Id/session_id).
