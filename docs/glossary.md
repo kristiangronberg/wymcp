@@ -7,33 +7,18 @@ here. Other documents point at a term's home instead of redefining it.
 
 **action**
 A named operation within a tool, selected by the `"action"` key in a call's
-arguments; atom internally, string on the wire. The narrowing key also
-holds an action name — a reference to this concept, not a second meaning.
-The elicitation-response `"action"` field (accept/decline/cancel) is an
-unrelated, spec-fixed wire collision.
-
-**built-in action**
-An introspection action the framework injects into every tool's action
-set — `help` and `describe`. Ordinary in dispatch, listings, and schema
-generation; always strict about unknown `data` keys, regardless of the
-tool's strict-params setting.
-_Avoid_: framework action, injected action
-
-**describe**
-The built-in action for contextual introspection — "what to know": full
-schemas with notes, related actions, and examples, for the whole tool or
-one narrowed action.
+arguments; atom internally, string on the wire. The help tool's `action`
+parameter also holds an action name — a reference to this concept, not a
+second meaning. The elicitation-response `"action"` field
+(accept/decline/cancel) is an unrelated, spec-fixed wire collision.
 
 **help**
-The built-in action for operational introspection — "how to call": terse
-action summaries for the whole tool, or one action's slim schema when
-narrowed.
-
-**narrowing**
-Restricting a `help`/`describe` call to a single action, named by the
-`action` key in `data`. A narrowed call returns that action's schema
-alone; an un-narrowed call returns the full catalog.
-_Avoid_: topic, filtering
+The framework-owned introspection tool, injected by the router into every
+server under the reserved tool name `help` — the server's entire
+introspection surface. Answers at three levels: a bare call returns the
+server index (tools with action one-liners); `tool` returns that tool
+complete; `tool` + `action` returns one action complete.
+_Avoid_: describe, built-in action, narrowing, topic
 
 ## Grandfathered (pending define)
 
@@ -55,15 +40,15 @@ end collect the synonym sets that span entries.
 - **required** — unconditionally required property names, AND-semantics. **Overloaded:** also the JSON Schema keyword (array) and `PromptArgument.required` (boolean) in the protocol schema. (`Wymcp.Tool`)
 - **required_one_of** — list of property groups; at least one group must be fully present (OR-of-AND), rendered as `anyOf`. (`Wymcp.Tool`, CHANGELOG 0.5.0)
 - **defaults** — default values merged into `data` after validation, before dispatch. (`Wymcp.Tool`)
-- **notes / related / examples** — optional documentation fields on an action schema, surfaced by describe. (`Wymcp.Tool`, CHANGELOG 0.5.0)
-- **strict params** — rejection of `data` keys not declared in `:properties` (`strict_params?` callback, default true; `unknown_params` error). (`Wymcp.Tool`, CHANGELOG 0.6.0)
+- **notes / related / examples** — optional documentation fields on an action schema; surfaced today by the describe built-in, by help's tool and action levels from 0.8.0. (`Wymcp.Tool`, CHANGELOG 0.5.0)
+- **strict params** — rejection of `data` keys not declared in `:properties` (`strict_params?` callback, default true; `unknown_params` error). (`Wymcp.Tool`, CHANGELOG 0.6.0) **Retiring** (0.8.0, spec: 2026-07-28-introspection-simplification): strictness becomes unconditional; the callback and the term go.
 - **definition** — a tool's full MCP wire definition emitted in `tools/list`: name, description, inputSchema, optional title/annotations/outputSchema. (`Wymcp.Tool`)
 - **input schema** (`inputSchema` on the wire) — the JSON Schema for a tool's arguments, generated from its actions. (`Wymcp.Tool.Schema`)
 - **output schema** (`outputSchema`) — optional JSON Schema validating a tool's structured result; enables `structuredContent`; version-gated. (`Wymcp.Tool`, `Wymcp.Methods.ToolsCall`)
 - **structuredContent** — the structured response object validated against the output schema, sent alongside `content`. (`Wymcp.Methods.ToolsCall`)
-- **schema mode** (`:full` / `:slim`) — whether `tools/list` emits the full `oneOf` schema or the slim schema. (`Wymcp.Tool`, README §2b)
-- **slim schema** — compact input schema: action enum + one-line descriptions, ~7× smaller `tools/list` payload. (`Wymcp.Tool.Schema`)
-- **oneOf variant** — the per-action discriminated schema branch in full mode, const-tagged on `action`. (`Wymcp.Tool.Schema`)
+- **schema mode** (`:full` / `:slim`) — whether `tools/list` emits the full `oneOf` schema or the slim schema. (`Wymcp.Tool`, README §2b) **Retiring** (0.8.0, spec: 2026-07-28-introspection-simplification): the mode split is deleted; the slim shape becomes the only input schema.
+- **slim schema** — compact input schema: action enum + one-line descriptions, ~7× smaller `tools/list` payload. (`Wymcp.Tool.Schema`) **Retiring** (0.8.0, same spec): with one shape there is nothing slim relative to — the term folds into **input schema**.
+- **oneOf variant** — the per-action discriminated schema branch in full mode, const-tagged on `action`. (`Wymcp.Tool.Schema`) **Retiring** (0.8.0, same spec): dies with full mode.
 - **annotations** — optional tool metadata (readOnlyHint, destructiveHint, idempotentHint, openWorldHint). **Overloaded:** the protocol schema also has `Annotations` for *content* metadata (audience, priority, lastModified) — two different definitions. (`Wymcp.Tool`, priv/schema.json)
 - **title** — human-readable display name for a tool or the server; version-gated to ≥ 2025-06-18. (`Wymcp.Tool`, `Wymcp.ProtocolVersion`)
 - **isError** — flag marking a `tools/call` result as a tool-originated error, returned as a *successful* JSON-RPC response with error content so the LLM can self-correct. (`Wymcp.Methods.ToolsCall`, CHANGELOG 0.3.0)
