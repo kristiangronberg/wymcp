@@ -115,7 +115,7 @@ defmodule Wymcp.VersionMatrixTest do
           })
 
         resp = JSON.decode!(conn.resp_body)
-        assert [defn] = resp["result"]["tools"]
+        assert defn = Enum.find(resp["result"]["tools"], &(&1["name"] == "matrix"))
         assert defn["name"] == "matrix"
       end
 
@@ -131,7 +131,7 @@ defmodule Wymcp.VersionMatrixTest do
           })
 
         resp = JSON.decode!(conn.resp_body)
-        [defn] = resp["result"]["tools"]
+        defn = Enum.find(resp["result"]["tools"], &(&1["name"] == "matrix"))
 
         if Wymcp.ProtocolVersion.supports_output_schema?(version) do
           assert Map.has_key?(defn, "outputSchema"),

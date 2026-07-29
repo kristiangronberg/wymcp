@@ -74,6 +74,56 @@ defmodule Wymcp.IntegrationTest do
     end
   end
 
+  defmodule IntegrationReservedNameTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "help"
+
+    @impl true
+    def description, do: "Illegally claims the reserved name"
+
+    @impl true
+    def actions do
+      %{run: %{description: "Run", properties: %{}, required: [], defaults: %{}}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx), do: {:ok, %{}}
+  end
+
+  defmodule ReservedNameRegisteringServer do
+    @moduledoc false
+    use Wymcp.Server
+
+    @impl Wymcp.Server
+    def init(_client_info, assigns) do
+      Session.register_tool(assigns.session_pid, IntegrationReservedNameTool)
+      {:ok, assigns}
+    end
+  end
+
+  defmodule ExitingServer do
+    @moduledoc false
+    use Wymcp.Server
+
+    @impl Wymcp.Server
+    def init(_client_info, _assigns) do
+      exit({:timeout, {GenServer, :call, [:permission_cache, :fetch, 5000]}})
+    end
+  end
+
+  defmodule TupleReasonServer do
+    @moduledoc false
+    use Wymcp.Server
+
+    @impl Wymcp.Server
+    def init(_client_info, _assigns) do
+      {:error, {:forbidden, 42}}
+    end
+  end
+
   defmodule CounterTool do
     @moduledoc false
 
@@ -87,7 +137,6 @@ defmodule Wymcp.IntegrationTest do
     def run_action(_action, _data, _ctx), do: {:error, "not used"}
     def hints(_action, _hint_context), do: []
     def handle_error(reason), do: "Error: #{inspect(reason)}"
-    def schema_mode, do: :full
     def action_context(_action, _ctx), do: nil
     def output_schema, do: nil
 
@@ -180,7 +229,7 @@ defmodule Wymcp.IntegrationTest do
       )
 
     list_resp = JSON.decode!(list_conn.resp_body)
-    assert [%{"name" => "counter"}] = list_resp["result"]["tools"]
+    assert [%{"name" => "counter"}, %{"name" => "help"}] = list_resp["result"]["tools"]
 
     # 4. First tool call — count starts at 0, returns 1
     call1 =
@@ -429,7 +478,6 @@ defmodule Wymcp.IntegrationTest do
     def run_action(_action, _data, _ctx), do: {:error, "not used"}
     def hints(_action, _hint_context), do: []
     def handle_error(reason), do: "Error: #{inspect(reason)}"
-    def schema_mode, do: :full
     def action_context(_action, _ctx), do: nil
     def output_schema, do: nil
 
@@ -660,6 +708,132 @@ defmodule Wymcp.IntegrationTest do
       call_body = JSON.decode!(call_conn.resp_body)
       refute call_body["result"]["isError"]
     end
+
+    @tag doc: """
+         Registration validation (D12, 2026-07-28-introspection-simplification)
+         raises inside the consumer's Server.init/2, which runs inside the
+         notifications/initialized request. A failure here means the raise
+         escaped the pipeline: the client would get an envelope-less 500 and
+         the session would sit alive until the 30-minute idle timeout.
+         """
+    @tag capture_log: true
+    test "a raise inside server init/2 terminates the session and answers internal_error" do
+      router_opts = Wymcp.Router.init(tools: [], server: ReservedNameRegisteringServer)
+
+      init_conn =
+        post_request(
+          router_opts,
+          %{
+            "jsonrpc" => "2.0",
+            "id" => 1,
+            "method" => "initialize",
+            "params" => %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "bad-registration", "version" => "1.0"}
+            }
+          },
+          []
+        )
+
+      assert init_conn.status == 200
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+      headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
+
+      notif_conn =
+        post_request(
+          router_opts,
+          %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+          headers
+        )
+
+      assert notif_conn.status == 200
+      body = JSON.decode!(notif_conn.resp_body)
+      assert body["error"]["code"] == -32603
+      assert body["error"]["data"]["reason"] =~ "reserved name"
+
+      Process.sleep(10)
+      assert {:error, :not_found} = Session.lookup(session_id)
+    end
+
+    @tag doc: """
+         An exit (GenServer.call timeout/noproc in consumer init/2 code) is
+         not an exception — a rescue-only guard misses it. A failure here
+         means the exit escaped the pipeline: envelope-less 500, orphaned
+         ready session until the idle timeout.
+         """
+    @tag capture_log: true
+    test "an exit inside server init/2 terminates the session and answers internal_error" do
+      router_opts = Wymcp.Router.init(tools: [], server: ExitingServer)
+
+      {session_id, headers} = initialize_session(router_opts, "exiting-server")
+
+      notif_conn =
+        post_request(
+          router_opts,
+          %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+          headers
+        )
+
+      assert notif_conn.status == 200
+      body = JSON.decode!(notif_conn.resp_body)
+      assert body["error"]["code"] == -32603
+      assert body["error"]["data"]["reason"] =~ "timeout"
+
+      Process.sleep(10)
+      assert {:error, :not_found} = Session.lookup(session_id)
+    end
+
+    @tag doc: """
+         Server.init/2 may return {:error, reason} with any term. A
+         Protocol.UndefinedError here means the error branch converts the
+         reason with to_string/1 again — non-binary reasons must survive
+         into the internal_error envelope.
+         """
+    @tag capture_log: true
+    test "a non-string init/2 rejection reason still answers internal_error" do
+      router_opts = Wymcp.Router.init(tools: [], server: TupleReasonServer)
+
+      {session_id, headers} = initialize_session(router_opts, "tuple-reason")
+
+      notif_conn =
+        post_request(
+          router_opts,
+          %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+          headers
+        )
+
+      assert notif_conn.status == 200
+      body = JSON.decode!(notif_conn.resp_body)
+      assert body["error"]["code"] == -32603
+      assert body["error"]["data"]["reason"] =~ "forbidden"
+
+      Process.sleep(10)
+      assert {:error, :not_found} = Session.lookup(session_id)
+    end
+  end
+
+  @spec initialize_session(Plug.opts(), String.t()) :: {String.t(), [{String.t(), String.t()}]}
+  defp initialize_session(router_opts, client_name) do
+    init_conn =
+      post_request(
+        router_opts,
+        %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => client_name, "version" => "1.0"}
+          }
+        },
+        []
+      )
+
+    assert init_conn.status == 200
+    [session_id] = get_resp_header(init_conn, "mcp-session-id")
+    {session_id, [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]}
   end
 
   @spec wait_for_pending_request(pid(), pos_integer()) :: String.t() | nil

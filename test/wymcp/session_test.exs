@@ -59,6 +59,44 @@ defmodule Wymcp.SessionTest do
     end
   end
 
+  defmodule ReservedNameRuntimeTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "help"
+
+    @impl true
+    def description, do: "Illegally claims the reserved name"
+
+    @impl true
+    def actions do
+      %{run: %{description: "Run", properties: %{}, required: [], defaults: %{}}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx), do: {:ok, %{}}
+  end
+
+  defmodule MalformedRuntimeTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "malformed"
+
+    @impl true
+    def description, do: "References a field absent from :properties"
+
+    @impl true
+    def actions do
+      %{run: %{description: "Run", properties: %{}, required: ["ghost"], defaults: %{}}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx), do: {:ok, %{}}
+  end
+
   describe "start_link/1" do
     test "starts a session and stores capabilities" do
       {:ok, pid} =
@@ -400,6 +438,28 @@ defmodule Wymcp.SessionTest do
     test "register_tool/2 succeeds even without a stream" do
       {:ok, pid, _id} = start_session()
       assert :ok = Session.register_tool(pid, RuntimeTool)
+    end
+  end
+
+  describe "register_tool/2 validation" do
+    test "raises on the reserved tool name and registers nothing" do
+      {:ok, pid, _id} = start_session()
+
+      assert_raise ArgumentError, ~r/reserved name "help"/, fn ->
+        Session.register_tool(pid, ReservedNameRuntimeTool)
+      end
+
+      assert Session.get_tools(pid) == []
+    end
+
+    test "raises on a malformed action schema, same as boot validation" do
+      {:ok, pid, _id} = start_session()
+
+      assert_raise ArgumentError, ~r/:required references field\(s\)/, fn ->
+        Session.register_tool(pid, MalformedRuntimeTool)
+      end
+
+      assert Session.get_tools(pid) == []
     end
   end
 

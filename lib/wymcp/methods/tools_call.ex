@@ -209,15 +209,26 @@ defmodule Wymcp.Methods.ToolsCall do
   end
 
   @spec validate_arguments(module(), map()) :: :ok | {:error, {:invalid_params, String.t()}}
-  defp validate_arguments(_tool, %{"action" => action}) when action in ["help", "describe"],
-    do: :ok
-
   defp validate_arguments(tool, arguments) do
-    case Wymcp.JsonRpc.validate_schema(tool.input_schema(), arguments) do
+    schema = drop_action_enum(tool.input_schema())
+
+    case Wymcp.JsonRpc.validate_schema(schema, arguments) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_params, reason}}
     end
   end
+
+  # The action enum is published in tools/list for upfront guidance;
+  # membership is checked in Wymcp.Tool.dispatch/4 so a wrong action gets a
+  # structured isError answer naming the valid actions, not a -32602.
+  @spec drop_action_enum(map()) :: map()
+  defp drop_action_enum(
+         %{"properties" => %{"action" => %{"enum" => _} = action_schema} = properties} = schema
+       ) do
+    %{schema | "properties" => %{properties | "action" => Map.delete(action_schema, "enum")}}
+  end
+
+  defp drop_action_enum(schema), do: schema
 
   @spec tool_not_found(Plug.Conn.t(), map()) :: Plug.Conn.t()
   defp tool_not_found(conn, request) do

@@ -3,11 +3,10 @@ defmodule Wymcp.Tool do
   Behaviour for MCP tools using the action-dispatched pattern.
 
   Each tool exposes multiple actions under a single tool name. The
-  `use Wymcp.Tool` macro generates a spec-compliant `inputSchema` with
-  `oneOf` variants from `actions/0`, handles dispatch via `run_action/2`,
-  validates required fields, rejects unknown parameters (when
-  `strict_params?/0`), applies defaults, injects hints, and formats
-  errors.
+  `use Wymcp.Tool` macro generates the `inputSchema` from `actions/0`
+  (via `Wymcp.Tool.Schema`), handles dispatch via `run_action/3`,
+  validates required fields, rejects unknown parameters, applies
+  defaults, injects hints, and formats errors.
 
   ## Usage
 
@@ -42,7 +41,8 @@ defmodule Wymcp.Tool do
 
   Each action in the `actions/0` map must have:
 
-  - `:description` — human-readable description (appears in oneOf schema)
+  - `:description` — human-readable description (appears in the action enum's
+    one-liners and in help output)
   - `:properties` — JSON Schema properties for the action's `data` parameter
 
   Optional fields:
@@ -51,23 +51,23 @@ defmodule Wymcp.Tool do
     Every listed field must be present in `data` (AND-semantics).
   - `:required_one_of` — list of groups, where each group is a list of property
     names. At least one group must be fully present (OR-of-AND semantics).
-    Combines with `:required` — both checks run, both must pass. Surfaces in
-    `help` output and is rendered into the `inputSchema` as `anyOf` on the
-    action variant's `data`.
+    Combines with `:required` — both checks run, both must pass.
+    Enforced at dispatch; surfaced by the `help` tool.
   - `:defaults` — map of default values merged into `data` before dispatch
     (defaults to `%{}`).
-  - `:notes` — long-form notes returned by `describe` and `help` with topic.
-  - `:related` — list of related action name strings returned by `describe`.
-  - `:examples` — list of example payload maps returned by `describe`.
+  - `:notes` — long-form notes surfaced by the `help` tool.
+  - `:related` — list of related action name strings surfaced by the `help` tool.
+  - `:examples` — list of example payload maps surfaced by the `help` tool.
 
   Defaults are applied after validation: values supplied via `:defaults`
   do not count toward satisfying `:required` or `:required_one_of`. Both
   checks run against the caller's `data` as received.
 
-  Action schemas are validated at server boot via `Wymcp.Router.init/1`. A
-  malformed schema (e.g. a `:required_one_of` group referencing a field not
-  declared in `:properties`) raises `ArgumentError` immediately, surfacing
-  the misconfiguration before any request is served.
+  Action schemas are validated at server boot via `Wymcp.Router.init/1` and
+  at runtime registration via `Wymcp.Session.register_tool/2`. A malformed
+  schema (e.g. a `:required_one_of` group referencing a field not declared
+  in `:properties`) raises `ArgumentError` immediately, surfacing the
+  misconfiguration before any request is served.
 
   ### Example: OR-of-AND required group
 
@@ -82,26 +82,7 @@ defmodule Wymcp.Tool do
         required_one_of: [["url"], ["project_key", "repo_slug", "pr_id"]]
       }
 
-  ### Slim mode trade-off for `:required_one_of`
-
-  In slim schema mode (`schema_mode/0` returns `:slim`), the `inputSchema`
-  emitted by `tools/list` does not encode per-action constraints — it only
-  lists action names and one-line descriptions. `:required_one_of` is
-  therefore visible to clients only via the `help`/`describe` round-trip.
-  Full schema mode (default) renders the constraint as `anyOf` on the
-  variant's `data`.
-
-  ## Built-in `help` and `describe` actions
-
-  Every tool exposes two built-in introspection actions:
-
-  - `help` — terse listing. With no topic: `{action_name => {description, required}}`.
-    With a topic: slim schema for that action.
-  - `describe` — full listing. With no topic: full schema for every action
-    (properties, defaults, notes, examples). With a topic: full schema for that
-    action.
-
-  ## Return values from `run_action/2`
+  ## Return values from `run_action/3`
 
   - `{:ok, response_data}` — success, response sent as JSON
   - `{:ok, response_data, hint_context}` — success with hints; the framework
@@ -117,18 +98,11 @@ defmodule Wymcp.Tool do
   - `hints/2` — returns a list of follow-up action suggestions. Default: `[]`
   - `handle_error/1` — formats an error reason into a string.
     Default: `"Operation failed: \#{inspect(reason)}"`
-  - `schema_mode/0` — returns `:full` (default) or `:slim`. Slim mode emits a
-    compact `tools/list` schema with action names and one-liners instead of full
-    `oneOf` variants.
-  - `strict_params?/0` — returns `true` (default) or `false`. When `true`,
-    `dispatch` rejects any key in `data` not declared in the action's
-    `:properties`, returning an `unknown_params` error instead of silently
-    ignoring it. Set to `false` to preserve the permissive legacy behavior.
   - `action_context/2` — returns a map of runtime context for the given
     action, or `nil`. Receives `(action_atom, ctx)`, where `ctx` is the
-    same `Wymcp.Context.t()` passed to `run_action/3`. Called during
-    help (with topic), describe (with topic), and normal action
-    dispatch. The map appears under a `"context"` key in the response.
+    same `Wymcp.Context.t()` passed to `run_action/3`. Called by the
+    `help` tool at action level and during normal action dispatch.
+    The map appears under a `"context"` key in the response.
     Read per-request data from `ctx.assigns` rather than the process
     dictionary — `action_context` may be invoked from a process that
     did not run the auth plug.
@@ -149,7 +123,6 @@ defmodule Wymcp.Tool do
   flowchart TD
       subgraph Tool Behaviour
           T[Wymcp.Tool] --> D["dispatch/4"]
-          D --> H["help / describe"]
           D --> A["action dispatch"]
           A --> R["handle_result/3"]
       end
@@ -162,14 +135,6 @@ defmodule Wymcp.Tool do
           R -->|"module.action_context/2"| CB
       end
   ```
-
-  ## Related Modules
-
-  See: `Wymcp.Tool.Schema` — builds oneOf JSON Schema from action definitions
-
-  ## Tests
-
-  See: `test/wymcp/tool_test.exs`
   """
 
   alias Wymcp.Context
@@ -196,8 +161,6 @@ defmodule Wymcp.Tool do
               {:ok, term()} | {:ok, term(), map()} | {:error, term()} | {:error, term(), map()}
   @callback hints(action :: atom(), hint_context :: map()) :: [hint()]
   @callback handle_error(error :: term()) :: String.t()
-  @callback schema_mode() :: :full | :slim
-  @callback strict_params?() :: boolean()
   @callback action_context(action :: atom(), ctx :: Wymcp.Context.t()) :: map() | nil
   @callback title() :: String.t() | nil
   @callback annotations() :: map() | nil
@@ -205,8 +168,6 @@ defmodule Wymcp.Tool do
 
   @optional_callbacks hints: 2,
                       handle_error: 1,
-                      schema_mode: 0,
-                      strict_params?: 0,
                       action_context: 2,
                       output_schema: 0,
                       title: 0,
@@ -224,12 +185,6 @@ defmodule Wymcp.Tool do
       @spec handle_error(term()) :: String.t()
       def handle_error(reason), do: "Operation failed: #{inspect(reason)}"
 
-      @spec schema_mode() :: :full | :slim
-      def schema_mode, do: :full
-
-      @spec strict_params?() :: boolean()
-      def strict_params?, do: true
-
       @spec action_context(atom(), Wymcp.Context.t()) :: map() | nil
       def action_context(_action, _ctx), do: nil
 
@@ -244,8 +199,6 @@ defmodule Wymcp.Tool do
 
       defoverridable hints: 2,
                      handle_error: 1,
-                     schema_mode: 0,
-                     strict_params?: 0,
                      action_context: 2,
                      output_schema: 0,
                      title: 0,
@@ -263,7 +216,7 @@ defmodule Wymcp.Tool do
         # Fully qualified by design: this is injected into the consumer's tool
         # module, so an alias here would leak into their namespace (macro hygiene).
         # credo:disable-for-next-line Credo.Check.Design.AliasUsage
-        Wymcp.Tool.Schema.build(actions(), schema_mode())
+        Wymcp.Tool.Schema.build(actions())
       end
 
       @doc false
@@ -294,14 +247,16 @@ defmodule Wymcp.Tool do
     end
   end
 
-  # -- Boot-time validation --
+  # -- Action-schema validation --
 
   @doc """
   Validate every action schema in `module`. Raises `ArgumentError` with a
   descriptive message on the first malformed action.
 
-  Called by `Wymcp.Router.init/1` so that misconfigured tools fail at boot
-  rather than at the first request.
+  Called by `Wymcp.Router.init/1` at boot and by
+  `Wymcp.Session.register_tool/2` at runtime registration, so a
+  misconfigured tool fails when it is wired in rather than at its first
+  request.
   """
   @spec validate_actions!(module()) :: :ok
   def validate_actions!(module) when is_atom(module) do
@@ -316,7 +271,8 @@ defmodule Wymcp.Tool do
 
   @spec validate_action_schema!(module(), atom(), map()) :: :ok
   defp validate_action_schema!(module, action, schema) do
-    properties = Map.get(schema, :properties, %{})
+    validate_description!(module, action, schema)
+    properties = validate_properties!(module, action, schema)
 
     validate_required!(module, action, Map.get(schema, :required, []), properties)
 
@@ -330,6 +286,44 @@ defmodule Wymcp.Tool do
     validate_doc_fields!(module, action, schema)
 
     :ok
+  end
+
+  # :description and :properties are load-bearing at request time — the
+  # description is interpolated into every tools/list and both are read
+  # unconditionally by the help tool — so their absence must fail here,
+  # not as a KeyError on the first request.
+  @spec validate_description!(module(), atom(), map()) :: :ok
+  defp validate_description!(module, action, schema) do
+    case Map.fetch(schema, :description) do
+      {:ok, description} when is_binary(description) ->
+        :ok
+
+      {:ok, other} ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                ":description must be a string, got #{inspect(other)}"
+
+      :error ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: missing :description"
+    end
+  end
+
+  @spec validate_properties!(module(), atom(), map()) :: map()
+  defp validate_properties!(module, action, schema) do
+    case Map.fetch(schema, :properties) do
+      {:ok, properties} when is_map(properties) ->
+        properties
+
+      {:ok, other} ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                ":properties must be a map, got #{inspect(other)}"
+
+      :error ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: missing :properties"
+    end
   end
 
   @spec validate_required!(module(), atom(), term(), map()) :: :ok
@@ -494,58 +488,6 @@ defmodule Wymcp.Tool do
   @doc false
   @spec dispatch(module(), Context.t(), String.t(), map() | nil) ::
           {:ok, Context.content()} | {:ok, Context.content(), map()} | {:error, String.t()}
-  def dispatch(module, ctx, "help", data) do
-    actions = module.actions()
-    data = data || %{}
-
-    case Map.get(data, "topic") do
-      nil ->
-        {:ok, Context.json(action_summary(module, actions))}
-
-      topic ->
-        case fetch_action(actions, topic) do
-          {:ok, action_atom, action, schema} ->
-            response = %{action: action, schema: slim_action_schema(schema)}
-            {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
-
-          {:error, :unknown_action} ->
-            {:error, "Unknown action: #{topic}"}
-        end
-    end
-  end
-
-  def dispatch(module, ctx, "describe", data) do
-    actions = module.actions()
-    data = data || %{}
-
-    case Map.get(data, "topic") do
-      nil ->
-        {:ok, Context.json(full_action_listing(module, actions))}
-
-      topic ->
-        case fetch_action(actions, topic) do
-          {:ok, action_atom, action, schema} ->
-            full =
-              Map.take(schema, [
-                :description,
-                :properties,
-                :required,
-                :required_one_of,
-                :defaults,
-                :notes,
-                :related,
-                :examples
-              ])
-
-            response = %{action: action, schema: full}
-            {:ok, Context.json(maybe_add_context(response, module, action_atom, ctx))}
-
-          {:error, :unknown_action} ->
-            {:error, "Unknown action: #{topic}"}
-        end
-    end
-  end
-
   def dispatch(module, ctx, action_str, data) do
     actions = module.actions()
     data = data || %{}
@@ -554,46 +496,48 @@ defmodule Wymcp.Tool do
          schema = Map.fetch!(actions, action),
          :ok <- check_required(data, schema, action_str),
          :ok <- check_required_one_of(data, schema, action_str),
-         :ok <- check_unknown_params(data, schema, action_str, module.strict_params?()) do
+         :ok <- check_unknown_params(data, schema, action_str) do
       merged = apply_defaults(data, Map.get(schema, :defaults, %{}))
       handle_result(module, action, ctx, module.run_action(action, merged, ctx))
     else
       {:error, :unknown_action} ->
-        {:error, "Unknown action: #{action_str}"}
+        unknown_action_error(module, action_str, actions)
 
       {:error, {:missing_required, missing, action_str, schema}} ->
-        {:ok,
-         Context.json(%{
+        {:error,
+         JSON.encode!(%{
            error: "missing_required_fields",
            message: "Required fields missing: #{Enum.join(missing, ", ")}",
            missing: missing,
            action: action_str,
-           input_schema: schema_summary(schema)
+           input_schema: schema_summary(schema),
+           help: help_pointer(module, action_str)
          })}
 
       {:error, {:missing_required_groups, groups, action_str, schema}} ->
-        {:ok,
-         Context.json(%{
+        {:error,
+         JSON.encode!(%{
            error: "missing_required_group",
            message:
              "At least one of these field groups must be fully present: " <>
                format_groups(groups),
            required_one_of: groups,
            action: action_str,
-           input_schema: schema_summary(schema)
+           input_schema: schema_summary(schema),
+           help: help_pointer(module, action_str)
          })}
 
       {:error, {:unknown_params, unknown, action_str, schema}} ->
-        {:ok,
-         Context.json(%{
+        {:error,
+         JSON.encode!(%{
            error: "unknown_params",
            message:
              "Unknown parameter(s) for action '#{action_str}': #{Enum.join(unknown, ", ")}. " <>
-               "These are rejected rather than silently ignored. " <>
-               "Use 'help' or 'describe' with this action to see valid parameters.",
+               "These are rejected rather than silently ignored.",
            unknown: unknown,
            action: action_str,
-           input_schema: schema_summary(schema)
+           input_schema: schema_summary(schema),
+           help: help_pointer(module, action_str)
          })}
     end
   end
@@ -619,11 +563,9 @@ defmodule Wymcp.Tool do
       else: {:error, {:missing_required, missing, action_str, schema}}
   end
 
-  @spec check_unknown_params(map(), action_schema(), String.t(), boolean()) ::
+  @spec check_unknown_params(map(), action_schema(), String.t()) ::
           :ok | {:error, {:unknown_params, [String.t()], String.t(), action_schema()}}
-  defp check_unknown_params(_data, _schema, _action_str, false), do: :ok
-
-  defp check_unknown_params(data, schema, action_str, true) do
+  defp check_unknown_params(data, schema, action_str) do
     allowed = schema |> Map.get(:properties, %{}) |> Map.keys() |> MapSet.new()
     unknown = data |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
@@ -711,6 +653,39 @@ defmodule Wymcp.Tool do
 
   # -- Definition helpers (called from generated definition/0) --
 
+  # The help-pointer format lives here and nowhere else: both Wymcp.Help
+  # and Wymcp.Tool.dispatch/4 render pointers through these two clauses.
+  @doc false
+  @spec help_pointer(module()) :: String.t()
+  def help_pointer(module) do
+    ~s|help {tool: "#{module.name()}"}|
+  end
+
+  @doc false
+  @spec help_pointer(module(), String.t()) :: String.t()
+  def help_pointer(module, action_str) do
+    ~s|help {tool: "#{module.name()}", action: "#{action_str}"}|
+  end
+
+  # One home for the wrong-action answer. Wymcp.Help's action level and
+  # Wymcp.Tool.dispatch/4's error branch are the same signal to a calling
+  # LLM; building the payload twice invites two error dialects.
+  @doc false
+  @spec unknown_action_error(module(), String.t(), map()) :: {:error, String.t()}
+  def unknown_action_error(module, action_name, actions) do
+    valid = actions |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+
+    {:error,
+     JSON.encode!(%{
+       error: "unknown_action",
+       message:
+         "Unknown action '#{action_name}' for tool '#{module.name()}'. " <>
+           "Valid actions: #{Enum.join(valid, ", ")}.",
+       valid_actions: valid,
+       help: help_pointer(module)
+     })}
+  end
+
   @doc false
   @spec maybe_put_title(map(), String.t() | nil) :: map()
   def maybe_put_title(definition_data, nil), do: definition_data
@@ -735,80 +710,6 @@ defmodule Wymcp.Tool do
     do: Map.put(definition_data, "outputSchema", schema)
 
   # -- Helpers --
-
-  @spec action_summary(module(), map()) :: map()
-  defp action_summary(module, actions) do
-    summary =
-      Map.new(actions, fn {action, schema} ->
-        entry = %{
-          description: schema.description,
-          required: Map.get(schema, :required, [])
-        }
-
-        entry =
-          case Map.get(schema, :required_one_of, []) do
-            [] -> entry
-            groups -> Map.put(entry, :required_one_of, groups)
-          end
-
-        {Atom.to_string(action), entry}
-      end)
-
-    %{tool: module.name(), actions: summary}
-  end
-
-  @spec full_action_listing(module(), map()) :: map()
-  defp full_action_listing(module, actions) do
-    actions_map =
-      Enum.into(actions, %{}, fn {action_atom, schema} ->
-        full =
-          Map.take(schema, [
-            :description,
-            :properties,
-            :required,
-            :required_one_of,
-            :defaults,
-            :notes,
-            :related,
-            :examples
-          ])
-
-        {Atom.to_string(action_atom), full}
-      end)
-
-    %{tool: module.name(), actions: actions_map}
-  end
-
-  @spec slim_action_schema(action_schema()) :: map()
-  defp slim_action_schema(schema) do
-    properties =
-      Map.new(schema.properties, fn {name, prop} ->
-        {name, Map.take(prop, ["type", "description"])}
-      end)
-
-    base = %{
-      description: schema.description,
-      required: Map.get(schema, :required, []),
-      properties: properties
-    }
-
-    case Map.get(schema, :required_one_of, []) do
-      [] -> base
-      groups -> Map.put(base, :required_one_of, groups)
-    end
-  end
-
-  @spec fetch_action(map(), String.t()) ::
-          {:ok, atom(), String.t(), map()} | {:error, :unknown_action}
-  defp fetch_action(actions, topic) do
-    atom = String.to_existing_atom(topic)
-
-    if Map.has_key?(actions, atom),
-      do: {:ok, atom, topic, Map.fetch!(actions, atom)},
-      else: {:error, :unknown_action}
-  rescue
-    ArgumentError -> {:error, :unknown_action}
-  end
 
   @spec maybe_add_context(map(), module(), atom(), Wymcp.Context.t()) :: map()
   defp maybe_add_context(response, module, action, ctx) do

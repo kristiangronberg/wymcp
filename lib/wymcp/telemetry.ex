@@ -38,9 +38,19 @@ defmodule Wymcp.Telemetry do
       exception: String.t(), error: String.t()}`
 
   For tool events, `action` is the raw `"action"` string from the call
-  arguments — what the client actually sent, including `"help"` and
-  `"describe"` — or `nil` when the arguments carried none. `is_error`
-  mirrors the MCP result's `isError` flag for tool-returned errors.
+  arguments — what the client actually sent — or `nil` when the arguments
+  carried none (a help call's arguments carry the *target* action, which is
+  echoed here). `is_error` mirrors the MCP result's `isError` flag for
+  tool-returned errors.
+
+  * `[:wymcp, :help, :called]` — the help tool answered a call (including
+    error answers). The authoritative introspection record; the same call
+    also emits the generic tool events above with `tool_name: "help"`.
+    - Measurements: `%{system_time: integer()}`
+    - Metadata: `%{tool: String.t() | nil, action: String.t() | nil,
+      level: :index | :tool | :action, session_id: String.t() | nil}` —
+      `tool`/`action` echo the requested target; `level` is which answer
+      level the parameter shape addressed.
 
   * `[:wymcp, :auth, :reject]` — auth module returned `{:error, reason}`
     - Measurements: `%{system_time: integer()}`

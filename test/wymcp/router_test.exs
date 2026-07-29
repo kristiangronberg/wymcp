@@ -92,6 +92,19 @@ defmodule Wymcp.RouterTest do
     def run_action(:noop, _data, _ctx), do: {:ok, %{}}
   end
 
+  defmodule ReservedNameTool do
+    use Wymcp.Tool
+
+    def name, do: "help"
+    def description, do: "Illegally claims the reserved name"
+
+    def actions do
+      %{noop: %{description: "Does nothing", properties: %{}, required: [], defaults: %{}}}
+    end
+
+    def run_action(:noop, _data, _ctx), do: {:ok, %{}}
+  end
+
   defmodule FailAuth do
     @behaviour Wymcp.Auth
 
@@ -125,7 +138,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -151,7 +163,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -177,7 +188,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -203,7 +213,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -229,7 +238,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -258,7 +266,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -284,7 +291,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -310,7 +316,6 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -336,7 +341,44 @@ defmodule Wymcp.RouterTest do
     def run_action(_, _, _), do: {:ok, %{}}
     def hints(_, _), do: []
     def handle_error(_), do: ""
-    def schema_mode, do: :full
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule MissingDescriptionTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "missing_description"
+    def description, do: "An action lacks :description"
+
+    def actions do
+      %{op: %{properties: %{"x" => %{"type" => "string"}}}}
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule MissingPropertiesTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "missing_properties"
+    def description, do: "An action lacks :properties"
+
+    def actions do
+      %{op: %{description: "Op without properties"}}
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
     def action_context(_, _), do: nil
     def title, do: nil
     def annotations, do: nil
@@ -348,30 +390,6 @@ defmodule Wymcp.RouterTest do
 
     def name, do: "oneof"
     def description, do: "OR-of-AND test tool"
-
-    def actions do
-      %{
-        identify: %{
-          description: "Identify by id or (name + color)",
-          properties: %{
-            "id" => %{"type" => "integer"},
-            "name" => %{"type" => "string"},
-            "color" => %{"type" => "string"}
-          },
-          required_one_of: [["id"], ["name", "color"]]
-        }
-      }
-    end
-
-    def run_action(:identify, data, _ctx), do: {:ok, %{found: data}}
-  end
-
-  defmodule SlimOneOfTool do
-    use Wymcp.Tool
-
-    def name, do: "slim_oneof"
-    def description, do: "OR-of-AND test tool, slim mode"
-    def schema_mode, do: :slim
 
     def actions do
       %{
@@ -693,16 +711,14 @@ defmodule Wymcp.RouterTest do
   end
 
   describe "tools/list" do
-    test "returns registered tools with oneOf schema" do
+    test "returns registered tools plus the injected help tool" do
       session_id = initialize()
 
       body = %{"jsonrpc" => "2.0", "id" => 3, "method" => "tools/list"}
       conn = call_with_session(body, session_id)
       resp = JSON.decode!(conn.resp_body)
 
-      [tool] = resp["result"]["tools"]
-      assert tool["name"] == "test_tool"
-      assert is_list(tool["inputSchema"]["oneOf"])
+      assert [%{"name" => "test_tool"}, %{"name" => "help"}] = resp["result"]["tools"]
     end
   end
 
@@ -954,7 +970,7 @@ defmodule Wymcp.RouterTest do
       conn = call_with_session(body, session_id, tools: [AnnotatedTestTool])
       resp = JSON.decode!(conn.resp_body)
 
-      [tool] = resp["result"]["tools"]
+      tool = Enum.find(resp["result"]["tools"], &(&1["name"] == "annotated_test"))
       assert tool["title"] == "Annotated Test"
       assert tool["annotations"]["readOnlyHint"] == true
       assert tool["annotations"]["openWorldHint"] == false
@@ -1235,8 +1251,45 @@ defmodule Wymcp.RouterTest do
     end
   end
 
+  describe "help auto-injection" do
+    test "init raises when a consumer tool claims the reserved name" do
+      assert_raise ArgumentError, ~r/reserved name "help"/, fn ->
+        Wymcp.Router.init(tools: [ReservedNameTool])
+      end
+    end
+
+    test "tools/list includes the injected help tool after the consumer tools" do
+      session_id = initialize()
+
+      body = %{"jsonrpc" => "2.0", "id" => 3, "method" => "tools/list"}
+      conn = call_with_session(body, session_id)
+      resp = JSON.decode!(conn.resp_body)
+
+      assert [%{"name" => "test_tool"}, %{"name" => "help"}] = resp["result"]["tools"]
+    end
+
+    test "help answers end-to-end through tools/call" do
+      session_id = initialize()
+
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 4,
+        "method" => "tools/call",
+        "params" => %{"name" => "help", "arguments" => %{"tool" => "test_tool"}}
+      }
+
+      conn = call_with_session(body, session_id)
+      resp = JSON.decode!(conn.resp_body)
+
+      assert resp["result"]["isError"] == false
+      response = resp["result"]["content"] |> hd() |> Map.get("text") |> JSON.decode!()
+      assert response["tool"] == "test_tool"
+      assert response["actions"]["ping"]["description"] == "Returns ok"
+    end
+  end
+
   describe "empty tools list" do
-    test "tools/list returns empty array when no tools registered" do
+    test "tools/list returns only the help tool when no tools registered" do
       session_id = initialize(tools: [])
 
       body = %{
@@ -1248,7 +1301,7 @@ defmodule Wymcp.RouterTest do
 
       conn = call_with_session(body, session_id, tools: [])
       resp = JSON.decode!(conn.resp_body)
-      assert resp["result"]["tools"] == []
+      assert [%{"name" => "help"}] = resp["result"]["tools"]
     end
 
     test "tools/call returns method_not_found when no tools registered" do
@@ -1355,6 +1408,25 @@ defmodule Wymcp.RouterTest do
   end
 
   describe "init/1 — action schema validation" do
+    @tag doc: """
+         :description and :properties are load-bearing at request time —
+         Schema.action_summaries/1 interpolates schema.description into every
+         tools/list and Help.render_action/1 dot-accesses both. A missing key
+         must fail at boot per this module's validation contract, not as a
+         KeyError escaping the pipeline on the first tools/list.
+         """
+    test "raises when an action lacks :description" do
+      assert_raise ArgumentError, ~r/:description/, fn ->
+        Wymcp.Router.init(tools: [MissingDescriptionTool])
+      end
+    end
+
+    test "raises when an action lacks :properties" do
+      assert_raise ArgumentError, ~r/:properties/, fn ->
+        Wymcp.Router.init(tools: [MissingPropertiesTool])
+      end
+    end
+
     test "raises when :required is not a list of binaries" do
       assert_raise ArgumentError, ~r/required/, fn ->
         Wymcp.Router.init(tools: [BadShapeRequiredTool])
@@ -1412,51 +1484,28 @@ defmodule Wymcp.RouterTest do
 
   describe "tools/list + tools/call with :required_one_of (end-to-end)" do
     @tag doc: """
-         Full mode advertises the constraint to clients via `anyOf` on the
-         variant's `data`. This is descriptive only — see the runtime test
-         below for enforcement.
+         The input schema deliberately omits per-action constraints, so
+         required_one_of is NOT advertised in tools/list. Clients learn
+         about it via the help tool; enforcement is at dispatch.
          """
-    test "full mode: tools/list exposes anyOf for required_one_of" do
+    test "tools/list omits anyOf (input schema has no per-action constraints)" do
       session_id = initialize(tools: [OneOfTool])
 
       body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
       conn = call_with_session(body, session_id, tools: [OneOfTool])
       resp = JSON.decode!(conn.resp_body)
 
-      [tool] = resp["result"]["tools"]
-      [variant] = tool["inputSchema"]["oneOf"]
-
-      assert variant["properties"]["data"]["anyOf"] == [
-               %{"required" => ["id"]},
-               %{"required" => ["name", "color"]}
-             ]
-    end
-
-    @tag doc: """
-         Slim mode emits a bare `data: {type: "object"}`, so the constraint is
-         NOT advertised in the inputSchema. Clients learn about it via the
-         framework-provided `help`/`describe` actions.
-         """
-    test "slim mode: tools/list omits anyOf (slim has no per-action constraints)" do
-      session_id = initialize(tools: [SlimOneOfTool])
-
-      body = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}
-      conn = call_with_session(body, session_id, tools: [SlimOneOfTool])
-      resp = JSON.decode!(conn.resp_body)
-
-      [tool] = resp["result"]["tools"]
+      tool = Enum.find(resp["result"]["tools"], &(&1["name"] == "oneof"))
       refute Map.has_key?(tool["inputSchema"], "oneOf")
       refute Map.has_key?(tool["inputSchema"]["properties"]["data"], "anyOf")
     end
 
     @tag doc: """
-         Full mode argument validation: a tools/call with no group satisfied is
-         rejected by `ToolsCall.validate_arguments/2` against the tool's
-         `inputSchema`, which encodes `required_one_of` as `anyOf` on the
-         variant's `data`. The response is a JSON-RPC error with code
-         -32602 (`invalid_params`).
+         The dispatch-level check is the sole enforcer of required_one_of —
+         the constraint is invisible in tools/list but a call with no group
+         satisfied still gets the structured missing_required_group error.
          """
-    test "full mode: tools/call with no group satisfied is rejected by inputSchema validation" do
+    test "tools/call with no group satisfied returns missing_required_group" do
       session_id = initialize(tools: [OneOfTool])
 
       body = %{
@@ -1472,30 +1521,7 @@ defmodule Wymcp.RouterTest do
       conn = call_with_session(body, session_id, tools: [OneOfTool])
       resp = JSON.decode!(conn.resp_body)
 
-      assert resp["error"]["code"] == -32602
-    end
-
-    @tag doc: """
-         Slim mode runtime enforcement: same code path as full mode. The
-         constraint is invisible in `tools/list` but still enforced at
-         dispatch time, proving the runtime check is the sole enforcer.
-         """
-    test "slim mode: tools/call with no group satisfied returns missing_required_group" do
-      session_id = initialize(tools: [SlimOneOfTool])
-
-      body = %{
-        "jsonrpc" => "2.0",
-        "id" => 1,
-        "method" => "tools/call",
-        "params" => %{
-          "name" => "slim_oneof",
-          "arguments" => %{"action" => "identify", "data" => %{"name" => "alpha"}}
-        }
-      }
-
-      conn = call_with_session(body, session_id, tools: [SlimOneOfTool])
-      resp = JSON.decode!(conn.resp_body)
-
+      assert resp["result"]["isError"] == true
       content = resp["result"]["content"] |> hd() |> Map.get("text") |> JSON.decode!()
       assert content["error"] == "missing_required_group"
       assert content["required_one_of"] == [["id"], ["name", "color"]]

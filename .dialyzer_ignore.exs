@@ -7,10 +7,12 @@
 # `warning_type` in `file`. More specific: {file, warning_type, line}.
 
 [
-  # Boot-time validators accept `term()` by design: they exist to
-  # detect malformed user-supplied schemas. Dialyzer's success
-  # typing converges on the well-formed shape because every error
-  # path raises, but the contract intentionally documents that
-  # arbitrary input is accepted.
-  {"lib/wymcp/tool.ex", :contract_supertype, 361}
+  # Action-schema validators accept `term()` by design: they exist to
+  # detect malformed user-supplied schemas. Dialyzer's success typing
+  # converges on the well-formed shape because every error path raises,
+  # but the contract intentionally documents that arbitrary input is
+  # accepted. File-scoped (no line) because the whole validator family in
+  # this file shares the rationale and line-pinned entries went stale on
+  # every edit above them.
+  {"lib/wymcp/tool.ex", :contract_supertype}
 ]

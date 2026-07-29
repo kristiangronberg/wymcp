@@ -68,6 +68,12 @@ defmodule Wymcp.Server do
   `client_info`, look up the authenticated user's permissions (the auth
   plug already stored the token in assigns), and call
   `Wymcp.Session.register_tool/2` for each authorized tool.
+  `register_tool/2` raises `ArgumentError` on a tool that claims the
+  reserved name `help` or carries a malformed action schema. Wymcp catches
+  the raise here, terminates the session, and answers the request with a
+  JSON-RPC `internal_error`, so one bad module refuses one session instead
+  of crashing the request. If you build the tool list from something your
+  own tests do not cover, validate or rescue around the loop yourself.
 
   `terminate/2` runs from the session GenServer's `terminate/2` callback,
   so it fires on normal shutdown (idle timeout, client DELETE) and abnormal

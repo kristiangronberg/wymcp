@@ -48,7 +48,10 @@ defmodule Wymcp.Router do
 
   ## Options
 
-  - `:tools` — list of modules implementing the `Wymcp.Tool` behaviour (required)
+  - `:tools` — list of modules implementing the `Wymcp.Tool` behaviour
+    (required). `Wymcp.Help` is appended automatically: every server exposes
+    the framework's introspection tool under the reserved name `help`, and no
+    consumer tool may use that name (`init/1` raises).
   - `:auth` — module implementing the `Wymcp.Auth` behaviour (optional, defaults
     to `Wymcp.Auth.Noop`)
   - `:www_authenticate` — keyword list of RFC 6750 auth-params appended to the
@@ -108,15 +111,33 @@ defmodule Wymcp.Router do
   plug(:dispatch)
 
   def init(opts) do
-    tools = Keyword.get(opts, :tools, [])
-    validate_unique_tool_names!(tools)
+    consumer_tools = Keyword.get(opts, :tools, [])
+    validate_reserved_tool_names!(consumer_tools)
+    validate_unique_tool_names!(consumer_tools)
+
+    tools = consumer_tools ++ [Wymcp.Help]
+    opts = Keyword.put(opts, :tools, tools)
+
     validate_action_schemas!(tools)
     validate_server_module(Keyword.get(opts, :server))
     validate_www_authenticate!(Keyword.get(opts, :www_authenticate, []))
     super(opts)
   end
 
-  @spec validate_action_schemas!([module()]) :: :ok
+  @spec validate_reserved_tool_names!([module()]) :: :ok
+  defp validate_reserved_tool_names!(tools) do
+    case Enum.find(tools, &(&1.name() == Wymcp.Help.name())) do
+      nil ->
+        :ok
+
+      module ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} uses the reserved name #{inspect(Wymcp.Help.name())}. " <>
+                "The help tool is provided by Wymcp and injected into every server automatically."
+    end
+  end
+
+  @spec validate_action_schemas!([module(), ...]) :: :ok
   defp validate_action_schemas!(tools) do
     Enum.each(tools, &Wymcp.Tool.validate_actions!/1)
     :ok

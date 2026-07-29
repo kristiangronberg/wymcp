@@ -247,9 +247,23 @@ defmodule Wymcp.Session do
 
   Tools can also be registered later in response to runtime events — for
   example, a tool that grants elevated access after a confirmation step.
+
+  Validates at registration, exactly as `Wymcp.Router.init/1` validates
+  compile-time tools at boot: raises `ArgumentError` if the module claims
+  the reserved tool name `help` or if any action schema is malformed
+  (`Wymcp.Tool.validate_actions!/1`) — a bad runtime tool fails here, in
+  the registering code path, not at its first request.
+
+  The raise propagates to the caller. On the `c:Wymcp.Server.init/2` path
+  above, that means the session is refused: wymcp catches it at its own
+  call site, logs it with the stacktrace, terminates the session, and
+  answers `notifications/initialized` with a JSON-RPC `internal_error` —
+  the same treatment `init/2` returning `{:error, reason}` gets. Registering
+  from anywhere else, the `ArgumentError` is yours to handle.
   """
   @spec register_tool(pid(), module()) :: :ok
   def register_tool(pid, tool_module) do
+    validate_registerable!(tool_module)
     GenServer.call(pid, {:register_tool, tool_module})
   end
 
@@ -574,6 +588,20 @@ defmodule Wymcp.Session do
     runtime_names = MapSet.new(runtime_tools, & &1.name())
     filtered_compile = Enum.reject(compile_tools, &(&1.name() in runtime_names))
     runtime_tools ++ filtered_compile
+  end
+
+  # Runs in the caller's process so a bad module fails the registering code
+  # path, not the session. The name/0 call also forces the module load (BEAM
+  # loads lazily) before validate_actions!/1 reads actions/0.
+  @spec validate_registerable!(module()) :: :ok
+  defp validate_registerable!(tool_module) do
+    if tool_module.name() == Wymcp.Help.name() do
+      raise ArgumentError,
+            "Tool #{inspect(tool_module)} uses the reserved name #{inspect(Wymcp.Help.name())}. " <>
+              "The help tool is provided by Wymcp and cannot be replaced at runtime."
+    end
+
+    Wymcp.Tool.validate_actions!(tool_module)
   end
 
   @spec generate_session_id() :: String.t()

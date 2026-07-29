@@ -1,36 +1,20 @@
 defmodule Wymcp.Tool.Schema do
   @moduledoc """
-  Builds JSON Schema `inputSchema` variants for Wymcp tools.
+  Builds the JSON Schema `inputSchema` for Wymcp tools.
 
-  Two schema modes are supported:
-
-  - `build/1` — full `oneOf` schema. Every action has a discriminated variant
-    with complete property definitions. MCP clients see the full input contract
-    in `tools/list`.
-
-  - `build_slim/1` — compact schema. The `action` field lists all action names
-    (plus `help` and `describe`) as an enum with one-liner descriptions. The
-    `data` field is a bare object. Reduces the `tools/list` payload by ~7x at
-    the cost of `help`/`describe` round-trips when the LLM needs action details.
-
-  `help` and `describe` are framework-provided actions. In slim mode they appear
-  in the action enum. In full mode they are NOT injected into the `oneOf` — instead,
-  Wymcp.Methods.ToolsCall (internal) bypasses schema validation for these action names.
-
-  ## Related Modules
-
-  See: `Wymcp.Tool` — uses this module in `input_schema/0`
-
-  ## Tests
-
-  See: `test/wymcp/tool/schema_test.exs`
+  One shape: the `action` field lists the declared action names as an enum
+  with one-line descriptions (via `action_summaries/1`), and `data` is a
+  bare object. `Wymcp.Tool`'s generated `input_schema/0` is the only caller.
+  Per-action constraints are deliberately not encoded here: `:required` and
+  `:required_one_of` are enforced at dispatch by `Wymcp.Tool`, and the full
+  per-action schemas are surfaced on demand by `Wymcp.Help`. Property
+  *values* (types, formats) are not validated by the framework at all — a
+  tool that needs value guarantees checks them in `run_action/3`. This keeps
+  the `tools/list` payload compact; agents act from the one-liners and pay
+  for a tool's full schemas only when they ask.
   """
 
   @type json_schema :: %{required(String.t()) => term()}
-
-  @spec build(map(), :full | :slim) :: json_schema()
-  def build(actions, :slim), do: build_slim(actions)
-  def build(actions, :full), do: build(actions)
 
   @spec build(map()) :: json_schema()
   def build(actions) when is_map(actions) do
@@ -40,105 +24,30 @@ defmodule Wymcp.Tool.Schema do
       |> Enum.map(&Atom.to_string/1)
       |> Enum.sort()
 
-    variants =
-      actions
-      |> Enum.map(fn {action_name, schema} -> build_variant(action_name, schema) end)
-      |> Enum.sort_by(fn v -> v["properties"]["action"]["const"] end)
-
     %{
       "type" => "object",
       "required" => ["action"],
       "properties" => %{
         "action" => %{
           "type" => "string",
-          "description" => "The operation to perform",
-          "enum" => action_names
-        },
-        "data" => %{
-          "type" => "object",
-          "description" => "Action-specific parameters"
-        }
-      },
-      "oneOf" => variants
-    }
-  end
-
-  @spec build_slim(map()) :: json_schema()
-  def build_slim(actions) when is_map(actions) do
-    action_names =
-      actions
-      |> Map.keys()
-      |> Enum.map(&Atom.to_string/1)
-      |> Enum.sort()
-
-    all_names = ["describe", "help" | action_names]
-
-    action_summaries =
-      actions
-      |> Enum.sort_by(fn {k, _} -> Atom.to_string(k) end)
-      |> Enum.map(fn {action, schema} -> "#{action}: #{schema.description}" end)
-
-    description =
-      [
-        "help: Get action summaries or parameter details for a specific action",
-        "describe: Get full schema with examples and constraints for an action"
-        | action_summaries
-      ]
-      |> Enum.join(". ")
-
-    %{
-      "type" => "object",
-      "required" => ["action"],
-      "properties" => %{
-        "action" => %{
-          "type" => "string",
-          "enum" => all_names,
-          "description" => description
+          "enum" => action_names,
+          "description" => Enum.join(action_summaries(actions), ". ")
         },
         "data" => %{"type" => "object"}
       }
     }
   end
 
-  @spec build_variant(atom(), map()) :: json_schema()
-  defp build_variant(action_name, schema) do
-    action_str = Atom.to_string(action_name)
-    required = Map.get(schema, :required, [])
-    one_of_groups = Map.get(schema, :required_one_of, [])
-
-    data_schema = %{"type" => "object", "properties" => schema.properties}
-
-    data_schema =
-      if required != [],
-        do: Map.put(data_schema, "required", required),
-        else: data_schema
-
-    data_schema =
-      case one_of_groups do
-        [] ->
-          data_schema
-
-        groups ->
-          any_of = Enum.map(groups, fn group -> %{"required" => group} end)
-          Map.put(data_schema, "anyOf", any_of)
-      end
-
-    variant_required =
-      if required != [] or one_of_groups != [],
-        do: ["action", "data"],
-        else: ["action"]
-
-    variant = %{
-      "properties" => %{
-        "action" => %{"const" => action_str},
-        "data" => data_schema
-      },
-      "required" => variant_required
-    }
-
-    case Map.get(schema, :description) do
-      nil -> variant
-      desc -> Map.put(variant, "description", desc)
-    end
+  @doc """
+  One-line `"name: description"` summaries for every action, sorted by
+  action name. Single content source for both the `tools/list` description
+  string and the help tool's server index — the two render from the same
+  list and cannot drift.
+  """
+  @spec action_summaries(map()) :: [String.t()]
+  def action_summaries(actions) when is_map(actions) do
+    actions
+    |> Enum.sort_by(fn {action, _schema} -> Atom.to_string(action) end)
+    |> Enum.map(fn {action, schema} -> "#{action}: #{schema.description}" end)
   end
 end

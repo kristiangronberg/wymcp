@@ -80,75 +80,47 @@ defmodule MyApp.Tools.Calculator do
 end
 ```
 
-### 2b. Schema modes and self-documentation (optional)
+### 2b. Self-documentation: the help tool
 
-By default, `Wymcp.Tool` emits a full `oneOf` schema in `tools/list`, giving
-MCP clients the complete input contract for every action. For tools with many
-actions this can be large (~7-10 KB per tool, ~2000 tokens).
+`tools/list` emits a compact schema per tool: an action enum with one-line
+descriptions, plus a bare `data` object. The LLM acts from the summaries and
+asks for detail only when it needs it, through the `help` tool that wymcp
+injects into every server (the tool name `help` is reserved for it):
 
-Override `schema_mode/0` to use slim mode instead:
+    help {}                                     → index of every tool and its actions
+    help {"tool": "tasks"}                      → that tool complete (schemas, notes, examples)
+    help {"tool": "tasks", "action": "create"}  → one action complete
 
-    defmodule MyApp.Tools.Tasks do
-      use Wymcp.Tool
+A wrong `tool` or `action` name errors naming the valid targets. Validation
+errors from a normal call also carry the action's schema summary plus a
+concrete help pointer — a confident LLM can attempt a call and learn from
+the error without a help round-trip.
 
-      @impl true
-      def schema_mode, do: :slim   # ~7x smaller tools/list payload
-
-      # ...
-    end
-
-In slim mode, `tools/list` returns a compact schema with an action enum and
-one-line descriptions. The thought is that the LLM then can discover more details
-progressively during use:
-
-**help** — "what can I do?" / "what params does this need?"
-
-    {"action": "help"}                              → summary of all actions
-    {"action": "help", "data": {"topic": "create"}} → slim schema (names + types)
-
-**describe** — "tell me everything about this action"
-
-    {"action": "describe", "data": {"topic": "create"}} → full schema + examples
-
-Both actions work in full and slim modes. Additionally, calling an action with
-missing required fields returns the action schema in the error response — a
-confident LLM can attempt a call and learn from the error without an explicit
-help round-trip.
+Schemas answer "how do I call this." The `:notes`, `:related`, and
+`:examples` fields on an action schema carry the domain knowledge —
+conventions, patterns, warnings the LLM should weigh before calling — and
+surface in help's tool and action levels.
 
 **action_context** — dynamic runtime information
 
-Tools can override `action_context/1` to inject runtime context into any
-response — help, describe, or normal action calls:
+Tools can override `action_context/2` to inject runtime context into help's
+action level and into normal action responses:
 
     @impl Wymcp.Tool
-    def action_context(:list) do
+    def action_context(:list, _ctx) do
       case MyApp.Tasks.count_overdue() do
         0 -> nil
         n -> %{tip: "#{n} tasks overdue — try actionable=true"}
       end
     end
-    def action_context(_action), do: nil
+    def action_context(_action, _ctx), do: nil
 
 When non-nil, the map appears under a `"context"` key in the response.
-
-#### Help vs Describe: what goes where
-
-- **help** is operational: "how to call this action." Schemas, parameter types,
-  required fields, and brief tips like "search first to get an ID." Think of it
-  as the function signature.
-- **describe** is contextual: "what you should know about this domain." Scheduling
-  patterns, good Jira filter examples, live runtime context like overdue counts.
-  References help for parameter details rather than duplicating. Think of it as
-  the doc comment.
-
-In practice: if the information helps the LLM construct a valid call, pit it in
-`help`. If it helps the LLM make a better decision about *whether* or *how* to
-call, put the information in `describe` (via the `:notes` key in the action schema).
 
 ### 2c. Hints (follow-up action suggestions)
 
 Tools can suggest follow-up actions by returning a three-element tuple from
-`run_action/2`. The framework calls the `hints/2` callback and injects the
+`run_action/3`. The framework calls the `hints/2` callback and injects the
 result into the response:
 
     @impl Wymcp.Tool
@@ -266,6 +238,9 @@ flowchart LR
     Dispatch --> Methods["Methods.*"]
     Methods --> Tool
     Methods --> Session
+    Methods --> Help
+    Help --> Session
+    Help --> Schema
     Tool --> Schema["Tool.Schema"]
     Tool --> Context
     Tool --> Hint
@@ -291,18 +266,22 @@ do not interact with the internal plug pipeline directly.
 
 [`Wymcp.Tool`](lib/wymcp/tool.ex) is the behaviour that consuming applications
 implement to expose capabilities to LLMs. Each tool declares a name, description,
-`actions/0` map (schemas), and a `run_action/2` callback. The `use Wymcp.Tool`
-macro generates `input_schema/0`, `run/2`, and `definition/0`. Two built-in
-actions provide progressive self-documentation: `help` returns action summaries
-or slim per-action schemas (names, types, required fields); `describe` returns
-the full schema including examples, patterns, and constraints. Override
-`schema_mode/0` to return `:slim` for a ~7x reduction in the `tools/list`
-payload at the cost of `help`/`describe` round-trips for unfamiliar actions.
-The existing `missing_required_fields` error response also returns schema
-details, so a confident LLM can often skip explicit `help` calls entirely.
-Return `{:error, reason, hint_context}` from `run_action/2` to attach hints to
-error responses — the framework calls `hints/2` and `action_context/1` on errors
-the same way it does on successes.
+`actions/0` map (schemas), and a `run_action/3` callback. The `use Wymcp.Tool`
+macro generates `input_schema/0`, `run/2`, and `definition/0`. Dispatch
+validates required fields and required-one-of groups and rejects unknown
+`data` keys; validation errors return `isError: true` content carrying the
+action's schema summary and a concrete `help` pointer, so a confident LLM can
+attempt a call and learn from the error. Return `{:error, reason,
+hint_context}` from `run_action/3` to attach hints to error responses — the
+framework calls `hints/2` and `action_context/2` on errors the same way it
+does on successes.
+
+[`Wymcp.Help`](lib/wymcp/help.ex) is the framework-owned introspection tool,
+injected by the router into every server under the reserved tool name `help`.
+It answers at three levels — a server index, one tool complete, one action
+complete — reading the session's effective tool list, and shares its
+one-liner content source with the `tools/list` description builder so the two
+cannot drift.
 
 [`Wymcp.Context`](lib/wymcp/context.ex) is the `%Context{}` struct passed as the
 third argument to every `run_action/3` callback. It carries the session
@@ -323,7 +302,7 @@ action name, description, and optional example payload. The struct validates
 required fields at construction time, rejects atoms for `tool` and `action`
 (enforcing the JSON wire format), and implements `JSON.Encoder` for serialization.
 Tools return hints via the `hints/2` callback, triggered by three-element tuples
-from `run_action/2`.
+from `run_action/3`.
 
 [`Wymcp.Auth`](lib/wymcp/auth.ex) is the behaviour for Bearer token
 authentication. Consuming applications implement `authenticate/1` to validate

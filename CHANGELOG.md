@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0]
+
+### Added
+
+- `help` — a framework-owned introspection tool (`Wymcp.Help`), injected by
+  the router into every server under the reserved tool name `help`. It
+  answers at three levels: a bare call returns the server index (every tool
+  with its action one-liners); `{"tool": "..."}` returns that tool complete
+  (all action schemas with notes, related actions, and examples);
+  `{"tool": "...", "action": "..."}` returns one action complete, plus the
+  tool's `action_context/2` output. An unknown or underspecified target
+  (including `action` without `tool`) returns `isError: true` content naming
+  the valid targets. Consumer tools may not use the name `help`:
+  `Wymcp.Router.init/1` raises at boot, `Session.register_tool/2` at
+  registration.
+- `[:wymcp, :help, :called]` telemetry event carrying the target tool, target
+  action, and answer level (`:index` / `:tool` / `:action`). See
+  `Wymcp.Telemetry`.
+- `Session.register_tool/2` now validates at registration — reserved-name
+  check plus the same `Wymcp.Tool.validate_actions!/1` schema validation
+  compile-time tools get at boot — so a malformed runtime tool fails when
+  registered, not at its first request.
+
+### Changed
+
+- **BREAKING:** the compact action-enum schema (formerly "slim mode") is now
+  the only `inputSchema` shape; the `schema_mode/0` callback and the full
+  `oneOf` schema generation are removed. **Consumers upgrading to 0.8.0 must
+  delete their `def schema_mode` overrides** — with the callback gone, an
+  override compiles with only a warning (an error under
+  `--warnings-as-errors`) and is silently ignored — and should re-check any
+  client tooling that consumed the `oneOf` variants from `tools/list`. Note
+  the full schema was also what validated `data` *values* (property types,
+  formats) at the protocol layer for full-mode tools: wymcp now checks key
+  presence (`:required`, `:required_one_of`) and key membership
+  (unknown-key rejection) only, so a tool that needs value guarantees must
+  check them in `run_action/3`.
+- **BREAKING:** dispatch validation errors (`missing_required_fields`,
+  `missing_required_group`, `unknown_params`) are now returned with
+  `isError: true` (previously `false`). They are tool-originated errors; per
+  the isError contract (see 0.3.0) error content is how the LLM sees and
+  self-corrects on them, and client retry heuristics key on the flag. The
+  structured JSON payload is unchanged apart from the new `help` pointer.
+  `Wymcp.Testing` follows the flag: `text_response/1` and `json_response/1`
+  now raise for these validation errors — assert them through
+  `error_response/1` instead.
+- **BREAKING:** a wrong action name now returns a structured `isError: true`
+  error naming the tool's valid actions and a help pointer, instead of a
+  `-32602` protocol error carrying an inspected schema-validation term. The
+  action enum stays published in `tools/list`; membership is checked at
+  dispatch. Malformed envelopes (missing `action`, wrong types) still return
+  `-32602`.
+- Dispatch validation error payloads gain a `help` key naming the concrete
+  call — e.g. `help {tool: "tasks", action: "create"}` — replacing
+  `unknown_params`' prose pointer to the removed built-ins.
+- An exception raised inside a consumer's `Wymcp.Server.init/2` is now caught
+  at wymcp's own call site: logged with its stacktrace, the session is
+  terminated, and `notifications/initialized` answers with a JSON-RPC
+  `internal_error` — the same treatment `init/2` returning `{:error, reason}`
+  already received. Previously it escaped the Plug pipeline uncaught, so the
+  client got no JSON-RPC envelope and the session stayed alive until its idle
+  timeout. This is what makes the new `register_tool/2` raise safe to trigger
+  from the registration loop that callback's docs recommend.
+
+### Removed
+
+- **BREAKING:** the per-tool built-in `help`/`describe` actions and their
+  `topic` parameter. The flat `help` tool replaces them. A consumer action
+  literally named `help` or `describe` — previously unreachable because the
+  built-ins shadowed it — now dispatches normally; only the *tool* name
+  `help` is reserved.
+- **BREAKING:** the `strict_params?/0` callback. Unknown-`data`-key rejection
+  (0.6.0) is now unconditional; no consumer overrode the default. A leftover
+  override compiles with only a warning and is ignored — delete it.
+- The `tools/call` schema-validation bypass for the built-in action names —
+  every tool's arguments, including help's, now validate against its
+  published schema.
+
 ## [0.7.1]
 
 ### Changed
