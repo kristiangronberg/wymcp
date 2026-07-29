@@ -50,16 +50,6 @@ POST /
 - `Response.send_json` halts the connection, preventing downstream plugs from executing after a response is sent.
 - Duplicate tool names are validated at `Router.init/1` (compile/startup time), not per-request.
 
-## Documentation
-
-- **Development-process records** (topic plans, roadmap) are kept outside
-  this repository.
-- **Standing reference docs** (single home for one cross-cutting concern):
-  `docs/mcp-spec-2025-11-25-overview.md` — the MCP 2025-11-25 spec
-  reference.
-- **No-stale rule**: keep every doc current or remove it; the change that
-  affects a doc (README, this file, standing docs) updates it.
-
 ## Code Conventions
 
 ### Module Layout
