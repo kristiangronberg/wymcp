@@ -115,7 +115,6 @@ defmodule Wymcp.Methods.RuntimeToolsTest do
 
   # -- Helpers --
 
-  @spec initialize_session(keyword()) :: {String.t(), [{String.t(), String.t()}]}
   defp initialize_session(router_opts) do
     init_conn =
       post_json(%{
@@ -143,7 +142,6 @@ defmodule Wymcp.Methods.RuntimeToolsTest do
     {session_id, headers}
   end
 
-  @spec post_json(map(), [{String.t(), String.t()}]) :: Plug.Conn.t()
   defp post_json(body, headers \\ []) do
     conn = conn(:post, "/", JSON.encode!(body))
     conn = put_req_header(conn, "content-type", "application/json")

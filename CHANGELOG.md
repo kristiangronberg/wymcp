@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2]
+
+### Removed
+
+- Dialyzer is decommissioned: the `dialyxir` dependency, the `mix dialyzer`
+  and `mix dialyzer.watch` tasks, the `dialyzer:` project config, and
+  `.dialyzer_ignore.exs` are gone. The type gate is the Elixir compiler's
+  set-theoretic checker (`compile --warnings-as-errors` in `mix precommit`)
+  plus guards at trust boundaries and the test suite.
+- Every `@spec` is removed. With Dialyzer retired nothing checks them — the
+  compiler's type checker ignores `@spec` entirely — so they were unverified
+  prose that could only drift. `@type`, `@callback`, and the behaviour
+  contracts are unchanged. Tool modules compiled with `use Wymcp.Tool` no
+  longer receive injected specs for the generated functions (`hints/2`,
+  `handle_error/1`, `action_context/2`, `title/0`, `annotations/0`,
+  `output_schema/0`, `input_schema/0`, `run/2`, `definition/0`); modules
+  compiled with `use Wymcp.Server` no longer receive injected specs for
+  `init/2` and `terminate/2` — metadata-only in both cases; behaviour is
+  unchanged.
+
+### Fixed
+
+- A malformed `Last-Event-ID` request header no longer crashes the SSE
+  stream. An event ID whose counter is not a non-negative integer
+  (`evt-x`) raised `ArgumentError` while the stream process started, which
+  killed the process handling the `GET` request; the stream now resumes its
+  event counter from 0.
+
 ## [0.8.1]
 
 ### Changed

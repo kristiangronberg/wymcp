@@ -12,6 +12,5 @@ defmodule Wymcp.Auth.Noop do
   @behaviour Wymcp.Auth
 
   @impl Wymcp.Auth
-  @spec authenticate(Plug.Conn.t()) :: {:ok, Plug.Conn.t()}
   def authenticate(%Plug.Conn{} = conn), do: {:ok, conn}
 end

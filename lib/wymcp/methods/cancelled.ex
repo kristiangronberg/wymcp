@@ -6,7 +6,6 @@ defmodule Wymcp.Methods.Cancelled do
   import Wymcp.Response
   alias Wymcp.Session
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
     params = conn.body_params["params"] || %{}
     request_id = params["requestId"]

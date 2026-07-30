@@ -150,10 +150,6 @@ defmodule Wymcp.IntegrationTest do
       }
     end
 
-    @spec run(Wymcp.Context.t(), map()) ::
-            {:ok, Wymcp.Context.content()}
-            | {:ok, Wymcp.Context.content(), map()}
-            | {:error, String.t()}
     def run(ctx, _params) do
       count = Map.get(ctx.assigns, :count, 0) + 1
       {:ok, Wymcp.Context.text("#{count}"), %{count: count}}
@@ -491,10 +487,6 @@ defmodule Wymcp.IntegrationTest do
       }
     end
 
-    @spec run(Wymcp.Context.t(), map()) ::
-            {:ok, Wymcp.Context.content()}
-            | {:ok, Wymcp.Context.content(), map()}
-            | {:error, String.t()}
     def run(ctx, _params) do
       case Wymcp.Context.sample(ctx, "Summarize the data", %{"maxTokens" => 100}) do
         {:ok, result} ->
@@ -813,7 +805,6 @@ defmodule Wymcp.IntegrationTest do
     end
   end
 
-  @spec initialize_session(Plug.opts(), String.t()) :: {String.t(), [{String.t(), String.t()}]}
   defp initialize_session(router_opts, client_name) do
     init_conn =
       post_request(
@@ -836,13 +827,11 @@ defmodule Wymcp.IntegrationTest do
     {session_id, [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]}
   end
 
-  @spec wait_for_pending_request(pid(), pos_integer()) :: String.t() | nil
   defp wait_for_pending_request(session_pid, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     wait_loop(session_pid, deadline)
   end
 
-  @spec wait_loop(pid(), integer()) :: String.t() | nil
   defp wait_loop(session_pid, deadline) do
     if System.monotonic_time(:millisecond) > deadline do
       nil

@@ -88,29 +88,24 @@ defmodule Wymcp.Context do
 
   @type content :: [%{required(String.t()) => binary()}, ...]
 
-  @spec text(String.t()) :: content()
   def text(text) when is_binary(text) do
     [%{"type" => "text", "text" => text}]
   end
 
-  @spec json(term()) :: content()
   def json(data) do
     text(JSON.encode!(data))
   end
 
-  @spec image(String.t(), String.t()) :: content()
   def image(base64_data, mime_type)
       when is_binary(base64_data) and is_binary(mime_type) do
     [%{"type" => "image", "data" => base64_data, "mimeType" => mime_type}]
   end
 
-  @spec audio(String.t(), String.t()) :: content()
   def audio(base64_data, mime_type)
       when is_binary(base64_data) and is_binary(mime_type) do
     [%{"type" => "audio", "data" => base64_data, "mimeType" => mime_type}]
   end
 
-  @spec progress_token(t()) :: String.t() | integer() | nil
   def progress_token(%__MODULE__{meta: nil}), do: nil
   def progress_token(%__MODULE__{meta: meta}), do: Map.get(meta, "progressToken")
 
@@ -125,7 +120,6 @@ defmodule Wymcp.Context do
   this lets tools call report_progress unconditionally without
   checking whether the client requested progress updates.
   """
-  @spec report_progress(t(), number(), number() | nil, String.t() | nil) :: :ok
   def report_progress(ctx, progress, total \\ nil, message \\ nil)
 
   def report_progress(%__MODULE__{session_pid: nil}, _progress, _total, _message), do: :ok
@@ -173,7 +167,6 @@ defmodule Wymcp.Context do
   The `data` parameter can be any JSON-serializable term — a string
   for simple messages, or a map/list for structured data.
   """
-  @spec log(t(), String.t(), term(), keyword()) :: :ok
   def log(ctx, level, data, opts \\ [])
 
   def log(%__MODULE__{session_pid: nil}, _level, _data, _opts), do: :ok
@@ -201,7 +194,6 @@ defmodule Wymcp.Context do
     end
   end
 
-  @spec should_log?(pid(), String.t()) :: boolean()
   defp should_log?(pid, level) do
     state = Wymcp.Session.get_state(pid)
 
@@ -234,8 +226,6 @@ defmodule Wymcp.Context do
   `sampling` capability. Returns `{:error, :no_session}` if called
   outside a session (e.g. in a unit test with nil session_pid).
   """
-  @spec sample(t(), String.t(), map()) ::
-          {:ok, map()} | {:error, :no_session | :no_stream | :not_supported | :timeout | map()}
   def sample(ctx, prompt, opts \\ %{})
 
   def sample(%__MODULE__{session_pid: nil}, _prompt, _opts), do: {:error, :no_session}
@@ -283,8 +273,6 @@ defmodule Wymcp.Context do
   `"decline"` (user refused), or `"cancel"` (user dismissed). When
   action is `"accept"`, `"content"` contains the validated form data.
   """
-  @spec elicit(t(), String.t(), map(), map()) ::
-          {:ok, map()} | {:error, :no_session | :no_stream | :not_supported | :timeout | map()}
   def elicit(ctx, message, schema, opts \\ %{})
 
   def elicit(%__MODULE__{session_pid: nil}, _message, _schema, _opts),
@@ -311,7 +299,6 @@ defmodule Wymcp.Context do
     end
   end
 
-  @spec check_capability(pid(), String.t()) :: :ok | {:error, :not_supported}
   defp check_capability(pid, capability) do
     state = Wymcp.Session.get_state(pid)
 
@@ -322,7 +309,6 @@ defmodule Wymcp.Context do
     end
   end
 
-  @spec check_elicitation_supported(pid()) :: :ok | {:error, :not_supported}
   defp check_elicitation_supported(pid) do
     state = Wymcp.Session.get_state(pid)
 
@@ -338,7 +324,6 @@ defmodule Wymcp.Context do
     end
   end
 
-  @spec generate_request_id() :: String.t()
   defp generate_request_id do
     "srv-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
   end

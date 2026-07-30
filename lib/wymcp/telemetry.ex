@@ -64,7 +64,6 @@ defmodule Wymcp.Telemetry do
       method: String.t() | nil}`
   """
 
-  @spec emit(atom(), atom(), map(), map()) :: :ok
   def emit(component, event, measurements \\ %{}, metadata \\ %{}) do
     :telemetry.execute(
       [:wymcp, component, event],

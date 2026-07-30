@@ -4,7 +4,6 @@ defmodule Wymcp.Methods.DeliverResponse do
   import Plug.Conn
   alias Wymcp.Session
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
     body = conn.body_params
     request_id = body["id"]

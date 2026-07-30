@@ -37,7 +37,6 @@ defmodule Wymcp.Testing do
 
   # -- Direct tool testing helpers --
 
-  @spec build_context(keyword()) :: Context.t()
   def build_context(opts \\ []) do
     %Context{
       session_pid: opts[:session_pid],
@@ -48,17 +47,14 @@ defmodule Wymcp.Testing do
     }
   end
 
-  @spec unwrap_text([map()]) :: String.t()
   def unwrap_text(content) do
     content |> unwrap_single() |> Map.fetch!("text")
   end
 
-  @spec unwrap_json([map(), ...]) :: term()
   def unwrap_json(content) do
     content |> unwrap_text() |> JSON.decode!()
   end
 
-  @spec unwrap_single([map()]) :: map()
   def unwrap_single([item]), do: item
 
   def unwrap_single(content),
@@ -66,7 +62,6 @@ defmodule Wymcp.Testing do
 
   # -- HTTP response testing helpers --
 
-  @spec build_call_request(String.t(), map()) :: map()
   def build_call_request(tool_name, arguments) do
     %{
       "jsonrpc" => "2.0",
@@ -79,7 +74,6 @@ defmodule Wymcp.Testing do
     }
   end
 
-  @spec build_action_request(String.t(), String.t(), map()) :: map()
   def build_action_request(tool_name, action, data \\ %{}) do
     args =
       if data == %{},
@@ -89,44 +83,35 @@ defmodule Wymcp.Testing do
     build_call_request(tool_name, args)
   end
 
-  @spec text_response(Plug.Conn.t()) :: String.t()
   def text_response(conn) do
     conn |> decode_result() |> check_success() |> get_content() |> unwrap_text()
   end
 
-  @spec json_response(Plug.Conn.t()) :: term()
   def json_response(conn) do
     conn |> text_response() |> JSON.decode!()
   end
 
-  @spec error_response(Plug.Conn.t()) :: String.t()
   def error_response(conn) do
     conn |> decode_result() |> check_error() |> get_content() |> unwrap_text()
   end
 
-  @spec image_response(Plug.Conn.t()) :: map()
   def image_response(conn) do
     conn |> decode_result() |> check_success() |> get_content() |> unwrap_single()
   end
 
-  @spec audio_response(Plug.Conn.t()) :: map()
   def audio_response(conn) do
     conn |> decode_result() |> check_success() |> get_content() |> unwrap_single()
   end
 
-  @spec decode_result(Plug.Conn.t()) :: map()
   defp decode_result(conn), do: JSON.decode!(conn.resp_body)
 
-  @spec check_success(map()) :: map()
   defp check_success(%{"result" => %{"isError" => true}}),
     do: raise("expected success, got error")
 
   defp check_success(response), do: response
 
-  @spec check_error(map()) :: map()
   defp check_error(%{"result" => %{"isError" => true}} = response), do: response
   defp check_error(_response), do: raise("expected error, got success")
 
-  @spec get_content(map()) :: [map()]
   defp get_content(%{"result" => %{"content" => content}}), do: content
 end

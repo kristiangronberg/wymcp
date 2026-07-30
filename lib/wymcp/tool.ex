@@ -184,22 +184,16 @@ defmodule Wymcp.Tool do
     quote do
       @behaviour Wymcp.Tool
 
-      @spec hints(atom(), map()) :: [Wymcp.Tool.hint()]
       def hints(_action, _hint_context), do: []
 
-      @spec handle_error(term()) :: String.t()
       def handle_error(reason), do: "Operation failed: #{inspect(reason)}"
 
-      @spec action_context(atom(), Wymcp.Context.t()) :: map() | nil
       def action_context(_action, _ctx), do: nil
 
-      @spec title() :: String.t() | nil
       def title, do: nil
 
-      @spec annotations() :: map() | nil
       def annotations, do: nil
 
-      @spec output_schema() :: map() | nil
       def output_schema, do: nil
 
       defoverridable hints: 2,
@@ -216,7 +210,6 @@ defmodule Wymcp.Tool do
   defmacro __before_compile__(_env) do
     quote do
       @doc false
-      @spec input_schema() :: map()
       def input_schema do
         # Fully qualified by design: this is injected into the consumer's tool
         # module, so an alias here would leak into their namespace (macro hygiene).
@@ -225,10 +218,6 @@ defmodule Wymcp.Tool do
       end
 
       @doc false
-      @spec run(Wymcp.Context.t(), map()) ::
-              {:ok, Wymcp.Context.content()}
-              | {:ok, Wymcp.Context.content(), map()}
-              | {:error, String.t()}
       def run(%Wymcp.Context{} = ctx, %{"action" => action_str} = params) do
         Wymcp.Tool.dispatch(__MODULE__, ctx, action_str, params["data"])
       end
@@ -237,7 +226,6 @@ defmodule Wymcp.Tool do
         {:error, "Missing required 'action' parameter"}
       end
 
-      @spec definition() :: map()
       def definition do
         definition_data = %{
           "name" => name(),
@@ -263,7 +251,6 @@ defmodule Wymcp.Tool do
   misconfigured tool fails when it is wired in rather than at its first
   request.
   """
-  @spec validate_actions!(module()) :: :ok
   def validate_actions!(module) when is_atom(module) do
     actions = module.actions()
 
@@ -274,7 +261,6 @@ defmodule Wymcp.Tool do
     :ok
   end
 
-  @spec validate_action_schema!(module(), atom(), map()) :: :ok
   defp validate_action_schema!(module, action, schema) do
     validate_action_name!(module, action)
     validate_description!(module, action, schema)
@@ -296,7 +282,6 @@ defmodule Wymcp.Tool do
 
   # A joined action summary is "<action>: <description>", so the name is the
   # other half the newline separator has to survive.
-  @spec validate_action_name!(module(), atom()) :: :ok
   defp validate_action_name!(module, action) when is_atom(action) do
     if String.contains?(Atom.to_string(action), "\n") do
       raise ArgumentError,
@@ -318,7 +303,6 @@ defmodule Wymcp.Tool do
   # description is interpolated into every tools/list and both are read
   # unconditionally by the help tool — so their absence must fail here,
   # not as a KeyError on the first request.
-  @spec validate_description!(module(), atom(), map()) :: :ok
   defp validate_description!(module, action, schema) do
     case Map.fetch(schema, :description) do
       {:ok, description} when is_binary(description) ->
@@ -343,7 +327,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec validate_properties!(module(), atom(), map()) :: map()
   defp validate_properties!(module, action, schema) do
     case Map.fetch(schema, :properties) do
       {:ok, properties} when is_map(properties) ->
@@ -360,7 +343,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec validate_required!(module(), atom(), term(), map()) :: :ok
   defp validate_required!(module, action, required, properties) do
     unless is_list(required) and Enum.all?(required, &is_binary/1) do
       raise ArgumentError,
@@ -386,7 +368,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec validate_required_one_of!(module(), atom(), term(), map()) :: :ok
   defp validate_required_one_of!(_module, _action, [], _properties), do: :ok
 
   defp validate_required_one_of!(module, action, groups, properties) do
@@ -427,7 +408,6 @@ defmodule Wymcp.Tool do
     :ok
   end
 
-  @spec validate_group_fields!(module(), atom(), [String.t()], map()) :: :ok
   defp validate_group_fields!(module, action, group, properties) do
     case Enum.reject(group, &Map.has_key?(properties, &1)) do
       [] ->
@@ -441,7 +421,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec check_no_strict_superset!(module(), atom(), [[String.t()]]) :: :ok
   defp check_no_strict_superset!(module, action, groups) do
     indexed = groups |> Enum.map(&MapSet.new/1) |> Enum.with_index()
     pairs = for {a, i} <- indexed, {b, j} <- indexed, i != j, do: {a, i, b, j}
@@ -459,7 +438,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec validate_doc_fields!(module(), atom(), map()) :: :ok
   defp validate_doc_fields!(module, action, schema) do
     validate_notes!(module, action, schema)
     validate_related!(module, action, schema)
@@ -467,7 +445,6 @@ defmodule Wymcp.Tool do
     :ok
   end
 
-  @spec validate_notes!(module(), atom(), map()) :: :ok
   defp validate_notes!(module, action, schema) do
     case Map.fetch(schema, :notes) do
       :error ->
@@ -483,7 +460,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec validate_related!(module(), atom(), map()) :: :ok
   defp validate_related!(module, action, schema) do
     case Map.fetch(schema, :related) do
       :error ->
@@ -500,7 +476,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec validate_examples!(module(), atom(), map()) :: :ok
   defp validate_examples!(module, action, schema) do
     case Map.fetch(schema, :examples) do
       :error ->
@@ -520,8 +495,6 @@ defmodule Wymcp.Tool do
   # -- Dispatch (called by generated run/2) --
 
   @doc false
-  @spec dispatch(module(), Context.t(), String.t(), map() | nil) ::
-          {:ok, Context.content()} | {:ok, Context.content(), map()} | {:error, String.t()}
   def dispatch(module, ctx, action_str, data) do
     actions = module.actions()
     data = data || %{}
@@ -576,7 +549,6 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec parse_action(String.t(), map()) :: {:ok, atom()} | {:error, :unknown_action}
   defp parse_action(action_str, actions) do
     action = String.to_existing_atom(action_str)
 
@@ -587,7 +559,6 @@ defmodule Wymcp.Tool do
     ArgumentError -> {:error, :unknown_action}
   end
 
-  @spec check_required(map(), action_schema(), String.t()) :: :ok | {:error, tuple()}
   defp check_required(data, schema, action_str) do
     required = Map.get(schema, :required, [])
     missing = Enum.reject(required, &Map.has_key?(data, &1))
@@ -597,8 +568,6 @@ defmodule Wymcp.Tool do
       else: {:error, {:missing_required, missing, action_str, schema}}
   end
 
-  @spec check_unknown_params(map(), action_schema(), String.t()) ::
-          :ok | {:error, {:unknown_params, [String.t()], String.t(), action_schema()}}
   defp check_unknown_params(data, schema, action_str) do
     allowed = schema |> Map.get(:properties, %{}) |> Map.keys() |> MapSet.new()
     unknown = data |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
@@ -608,8 +577,6 @@ defmodule Wymcp.Tool do
       else: {:error, {:unknown_params, Enum.sort(unknown), action_str, schema}}
   end
 
-  @spec check_required_one_of(map(), action_schema(), String.t()) ::
-          :ok | {:error, tuple()}
   defp check_required_one_of(data, schema, action_str) do
     case Map.get(schema, :required_one_of, []) do
       [] ->
@@ -624,15 +591,12 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec group_present?([String.t()], map()) :: boolean()
   defp group_present?(group, data), do: Enum.all?(group, &Map.has_key?(data, &1))
 
-  @spec format_groups([[String.t()]]) :: String.t()
   defp format_groups(groups) do
     Enum.map_join(groups, " OR ", fn group -> "(" <> Enum.join(group, " + ") <> ")" end)
   end
 
-  @spec schema_summary(action_schema()) :: map()
   defp schema_summary(schema) do
     base = %{
       properties: schema.properties,
@@ -646,11 +610,8 @@ defmodule Wymcp.Tool do
     end
   end
 
-  @spec apply_defaults(map(), map()) :: map()
   defp apply_defaults(data, defaults), do: Map.merge(defaults, data)
 
-  @spec handle_result(module(), atom(), Wymcp.Context.t(), tuple()) ::
-          {:ok, Context.content()} | {:ok, Context.content(), map()} | {:error, String.t()}
   defp handle_result(module, action, ctx, {:ok, response}) do
     {:ok, Context.json(maybe_add_context(response, module, action, ctx))}
   end
@@ -690,13 +651,11 @@ defmodule Wymcp.Tool do
   # The help-pointer format lives here and nowhere else: both Wymcp.Help
   # and Wymcp.Tool.dispatch/4 render pointers through these two clauses.
   @doc false
-  @spec help_pointer(module()) :: String.t()
   def help_pointer(module) do
     ~s|help {tool: "#{module.name()}"}|
   end
 
   @doc false
-  @spec help_pointer(module(), String.t()) :: String.t()
   def help_pointer(module, action_str) do
     ~s|help {tool: "#{module.name()}", action: "#{action_str}"}|
   end
@@ -705,7 +664,6 @@ defmodule Wymcp.Tool do
   # Wymcp.Tool.dispatch/4's error branch are the same signal to a calling
   # LLM; building the payload twice invites two error dialects.
   @doc false
-  @spec unknown_action_error(module(), String.t(), map()) :: {:error, String.t()}
   def unknown_action_error(module, action_name, actions) do
     valid = actions |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
 
@@ -721,14 +679,12 @@ defmodule Wymcp.Tool do
   end
 
   @doc false
-  @spec maybe_put_title(map(), String.t() | nil) :: map()
   def maybe_put_title(definition_data, nil), do: definition_data
 
   def maybe_put_title(definition_data, title) when is_binary(title),
     do: Map.put(definition_data, "title", title)
 
   @doc false
-  @spec maybe_put_annotations(map(), map() | nil) :: map()
   def maybe_put_annotations(definition_data, nil), do: definition_data
 
   def maybe_put_annotations(definition_data, %{} = ann) when map_size(ann) > 0,
@@ -737,7 +693,6 @@ defmodule Wymcp.Tool do
   def maybe_put_annotations(definition_data, _), do: definition_data
 
   @doc false
-  @spec maybe_put_output_schema(map(), map() | nil) :: map()
   def maybe_put_output_schema(definition_data, nil), do: definition_data
 
   def maybe_put_output_schema(definition_data, schema) when is_map(schema),
@@ -745,7 +700,6 @@ defmodule Wymcp.Tool do
 
   # -- Helpers --
 
-  @spec maybe_add_context(map(), module(), atom(), Wymcp.Context.t()) :: map()
   defp maybe_add_context(response, module, action, ctx) do
     case module.action_context(action, ctx) do
       nil -> response

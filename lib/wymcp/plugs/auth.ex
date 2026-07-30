@@ -53,7 +53,6 @@ defmodule Wymcp.Plugs.Auth do
     do_authenticate(conn, auth_module)
   end
 
-  @spec do_authenticate(Plug.Conn.t(), module()) :: Plug.Conn.t()
   defp do_authenticate(conn, auth_module) do
     case auth_module.authenticate(conn) do
       {:ok, conn} ->
@@ -69,7 +68,6 @@ defmodule Wymcp.Plugs.Auth do
       send_unauthorized(conn, "Authentication error")
   end
 
-  @spec log_and_emit_reject(Plug.Conn.t(), module(), String.t()) :: :ok
   defp log_and_emit_reject(conn, auth_module, reason) do
     request_id = request_field(conn, "id")
     method = request_field(conn, "method")
@@ -91,8 +89,6 @@ defmodule Wymcp.Plugs.Auth do
     :ok
   end
 
-  @spec log_and_emit_error(Plug.Conn.t(), module(), Exception.t(), Exception.stacktrace()) ::
-          :ok
   defp log_and_emit_error(conn, auth_module, exception, stacktrace) do
     request_id = request_field(conn, "id")
     method = request_field(conn, "method")
@@ -169,6 +165,5 @@ defmodule Wymcp.Plugs.Auth do
     ~s(#{key}="#{escaped}")
   end
 
-  @spec request_field(Plug.Conn.t(), String.t()) :: term() | nil
   defp request_field(%Plug.Conn{body_params: params}, key), do: Map.get(params, key)
 end

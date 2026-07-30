@@ -16,7 +16,6 @@ defmodule Wymcp.Methods.Initialize do
     theme: "theme"
   }
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
     request = conn.body_params
     params = request["params"] || %{}
@@ -90,7 +89,6 @@ defmodule Wymcp.Methods.Initialize do
     |> send_json(response)
   end
 
-  @spec build_server_info(String.t(), String.t(), map() | nil, String.t()) :: map()
   defp build_server_info(name, version, nil, negotiated_version) do
     %{"name" => name, "version" => version}
     |> ProtocolVersion.strip_server_info(negotiated_version)
@@ -105,12 +103,9 @@ defmodule Wymcp.Methods.Initialize do
     |> ProtocolVersion.strip_server_info(negotiated_version)
   end
 
-  @spec maybe_put(%{required(String.t()) => term()}, String.t(), term()) ::
-          %{required(String.t()) => term()}
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  @spec maybe_put_icons(map(), [%{atom() => term()}] | nil) :: map()
   defp maybe_put_icons(map, nil), do: map
   defp maybe_put_icons(map, []), do: map
 
@@ -118,14 +113,12 @@ defmodule Wymcp.Methods.Initialize do
     Map.put(map, "icons", Enum.map(icons, &encode_icon/1))
   end
 
-  @spec encode_icon(%{atom() => term()}) :: %{String.t() => term()}
   defp encode_icon(icon) do
     {known, unknown} = Map.split(icon, Map.keys(@icon_key_map))
     _ = log_dropped_keys(unknown)
     Map.new(known, fn {k, v} -> {Map.fetch!(@icon_key_map, k), v} end)
   end
 
-  @spec log_dropped_keys(map()) :: :ok
   defp log_dropped_keys(unknown) when map_size(unknown) == 0, do: :ok
 
   defp log_dropped_keys(unknown) do

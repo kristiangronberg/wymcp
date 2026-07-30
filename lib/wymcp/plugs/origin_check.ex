@@ -8,11 +8,9 @@ defmodule Wymcp.Plugs.OriginCheck do
   @behaviour Plug
 
   @impl Plug
-  @spec init(keyword()) :: keyword()
   def init(opts), do: opts
 
   @impl Plug
-  @spec call(Plug.Conn.t(), keyword()) :: Plug.Conn.t()
   def call(%Plug.Conn{} = conn, _opts) do
     wymcp_opts = conn.assigns[:wymcp] || []
 
@@ -23,7 +21,6 @@ defmodule Wymcp.Plugs.OriginCheck do
     end
   end
 
-  @spec check_origin(Plug.Conn.t(), [String.t()]) :: Plug.Conn.t()
   defp check_origin(conn, allowlist) do
     case get_req_header(conn, "origin") do
       [] ->
@@ -38,7 +35,6 @@ defmodule Wymcp.Plugs.OriginCheck do
     end
   end
 
-  @spec reject_origin(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   defp reject_origin(conn, origin) do
     data = %{error: "Origin not allowed: #{origin}"}
     response = JsonRpc.error_response(:invalid_request, nil, data)

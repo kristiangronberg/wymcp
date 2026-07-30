@@ -20,7 +20,6 @@ defmodule Wymcp.Tool.Schema do
 
   @type json_schema :: %{required(String.t()) => term()}
 
-  @spec build(map()) :: json_schema()
   def build(actions) when is_map(actions) do
     action_names =
       actions
@@ -51,7 +50,6 @@ defmodule Wymcp.Tool.Schema do
   help tool's server index — the two render from the same list and cannot
   drift.
   """
-  @spec action_summaries(map()) :: [String.t()]
   def action_summaries(actions) when is_map(actions) do
     actions
     |> Enum.sort_by(fn {action, _schema} -> Atom.to_string(action) end)

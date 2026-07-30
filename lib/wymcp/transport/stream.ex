@@ -25,7 +25,6 @@ defmodule Wymcp.Transport.Stream do
   import Plug.Conn
   alias Wymcp.Transport.SSE
 
-  @spec open(Plug.Conn.t()) :: Plug.Conn.t()
   def open(conn) do
     conn
     |> put_resp_content_type("text/event-stream")
@@ -33,20 +32,14 @@ defmodule Wymcp.Transport.Stream do
     |> send_chunked(200)
   end
 
-  @spec push(Plug.Conn.t(), map(), String.t() | nil) ::
-          {:ok, Plug.Conn.t()} | {:error, term()}
   def push(conn, message, event_id \\ nil) do
     chunk(conn, SSE.encode(message, event_id))
   end
 
-  @spec push_empty(Plug.Conn.t(), String.t()) ::
-          {:ok, Plug.Conn.t()} | {:error, term()}
   def push_empty(conn, event_id) do
     chunk(conn, SSE.encode_empty(event_id))
   end
 
-  @spec push_keepalive(Plug.Conn.t()) ::
-          {:ok, Plug.Conn.t()} | {:error, term()}
   def push_keepalive(conn) do
     chunk(conn, ":keepalive\n\n")
   end

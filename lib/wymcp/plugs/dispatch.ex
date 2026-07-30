@@ -17,7 +17,6 @@ defmodule Wymcp.Plugs.Dispatch do
     end
   end
 
-  @spec dispatch_request(Plug.Conn.t()) :: Plug.Conn.t()
   defp dispatch_request(conn) do
     case conn.body_params["method"] do
       "initialize" -> Methods.Initialize.run(conn)
@@ -31,6 +30,5 @@ defmodule Wymcp.Plugs.Dispatch do
     end
   end
 
-  @spec tools(Plug.Conn.t()) :: [module()]
   defp tools(conn), do: conn.assigns[:wymcp][:tools] || []
 end

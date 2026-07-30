@@ -6,7 +6,6 @@ defmodule Wymcp.Methods.ToolsCall do
   import Wymcp.Response
   alias Wymcp.{Context, JsonRpc, ProtocolVersion, Session}
 
-  @spec run(Plug.Conn.t(), [module()]) :: Plug.Conn.t()
   def run(%Plug.Conn{} = conn, compile_tools) do
     request = conn.body_params
     params = request["params"] || %{}
@@ -36,7 +35,6 @@ defmodule Wymcp.Methods.ToolsCall do
     end
   end
 
-  @spec resolve_tools(Plug.Conn.t(), [module()]) :: [module()]
   defp resolve_tools(conn, _compile_tools) do
     Session.get_tools(conn.assigns[:wymcp_session_pid])
   end
@@ -114,7 +112,6 @@ defmodule Wymcp.Methods.ToolsCall do
     end
   end
 
-  @spec send_tool_result(Plug.Conn.t(), map(), module(), list(), boolean()) :: Plug.Conn.t()
   defp send_tool_result(conn, request, tool, content, is_error) do
     version = Session.negotiated_version(conn)
 
@@ -127,7 +124,6 @@ defmodule Wymcp.Methods.ToolsCall do
     send_json(conn, response)
   end
 
-  @spec maybe_add_structured_content(map(), module(), list(), boolean()) :: map()
   defp maybe_add_structured_content(result, tool, content, is_error) do
     case tool.output_schema() do
       nil ->
@@ -150,7 +146,6 @@ defmodule Wymcp.Methods.ToolsCall do
     end
   end
 
-  @spec extract_structured_content(list()) :: map()
   defp extract_structured_content(content) do
     case content do
       [%{"type" => "text", "text" => json_text}] ->
@@ -164,7 +159,6 @@ defmodule Wymcp.Methods.ToolsCall do
     end
   end
 
-  @spec build_context(Plug.Conn.t()) :: Context.t()
   defp build_context(conn) do
     request = conn.body_params
     meta = get_in(request, ["params", "_meta"])
@@ -186,21 +180,18 @@ defmodule Wymcp.Methods.ToolsCall do
     }
   end
 
-  @spec filter_internal_assigns(%{atom() => term()}) :: map()
   defp filter_internal_assigns(assigns) do
     Map.reject(assigns, fn {key, _value} ->
       key == :wymcp or (is_atom(key) and String.starts_with?(Atom.to_string(key), "wymcp_"))
     end)
   end
 
-  @spec persist_assigns(Plug.Conn.t(), map()) :: :ok
   defp persist_assigns(conn, assigns_updates) do
     session_pid = conn.assigns[:wymcp_session_pid]
     Session.put_assigns(session_pid, assigns_updates)
     :ok
   end
 
-  @spec get_tool([module()], String.t()) :: {:ok, module()} | {:error, :not_found}
   defp get_tool(tools, name) do
     case Enum.find(tools, &(&1.name() == name)) do
       nil -> {:error, :not_found}
@@ -208,7 +199,6 @@ defmodule Wymcp.Methods.ToolsCall do
     end
   end
 
-  @spec validate_arguments(module(), map()) :: :ok | {:error, {:invalid_params, String.t()}}
   defp validate_arguments(tool, arguments) do
     schema = drop_action_enum(tool.input_schema())
 
@@ -221,7 +211,6 @@ defmodule Wymcp.Methods.ToolsCall do
   # The action enum is published in tools/list for upfront guidance;
   # membership is checked in Wymcp.Tool.dispatch/4 so a wrong action gets a
   # structured isError answer naming the valid actions, not a -32602.
-  @spec drop_action_enum(map()) :: map()
   defp drop_action_enum(
          %{"properties" => %{"action" => %{"enum" => _} = action_schema} = properties} = schema
        ) do
@@ -230,14 +219,12 @@ defmodule Wymcp.Methods.ToolsCall do
 
   defp drop_action_enum(schema), do: schema
 
-  @spec tool_not_found(Plug.Conn.t(), map()) :: Plug.Conn.t()
   defp tool_not_found(conn, request) do
     data = %{original_request: request}
     response = JsonRpc.error_response(:method_not_found, request["id"], data)
     send_json(conn, response)
   end
 
-  @spec invalid_params(Plug.Conn.t(), map(), String.t()) :: Plug.Conn.t()
   defp invalid_params(conn, request, reason) do
     data = %{error: reason, original_request: request}
     response = JsonRpc.error_response(:invalid_params, request["id"], data)

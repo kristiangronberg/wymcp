@@ -6,14 +6,12 @@ defmodule Wymcp.Methods.Initialized do
   import Wymcp.Response
   alias Wymcp.{JsonRpc, Session}
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
     session_pid = conn.assigns[:wymcp_session_pid]
     Session.mark_ready(session_pid)
     invoke_server_init(conn, session_pid)
   end
 
-  @spec invoke_server_init(Plug.Conn.t(), pid()) :: Plug.Conn.t()
   defp invoke_server_init(conn, session_pid) do
     state = Session.get_state(session_pid)
 
@@ -60,7 +58,6 @@ defmodule Wymcp.Methods.Initialized do
   # Converting to {:error, reason} routes it into the graceful branch below
   # (log, terminate, internal_error). Same shape as
   # Wymcp.Methods.ToolsCall's rescue around a tool's run/2.
-  @spec safe_init(module(), map(), map()) :: {:ok, map()} | {:error, term()}
   defp safe_init(server, client_info, assigns) do
     server.init(client_info, assigns)
   rescue
@@ -82,7 +79,6 @@ defmodule Wymcp.Methods.Initialized do
   # Server.init/2's rejection reason is term() by contract; only binaries
   # and atoms have a String.Chars head, so anything else goes through
   # inspect instead of raising Protocol.UndefinedError out of the pipeline.
-  @spec reason_to_string(term()) :: String.t()
   defp reason_to_string(reason) when is_binary(reason), do: reason
   defp reason_to_string(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_to_string(reason), do: inspect(reason)

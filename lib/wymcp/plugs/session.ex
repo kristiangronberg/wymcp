@@ -129,7 +129,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec resolve_session_for_response(Plug.Conn.t()) :: Plug.Conn.t()
   defp resolve_session_for_response(conn) do
     case get_req_header(conn, "mcp-session-id") do
       [session_id] ->
@@ -151,7 +150,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec resolve_session(Plug.Conn.t()) :: Plug.Conn.t()
   defp resolve_session(conn) do
     method = conn.body_params["method"]
 
@@ -176,7 +174,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec check_lifecycle_gate(Plug.Conn.t(), pid(), String.t()) :: Plug.Conn.t()
   defp check_lifecycle_gate(%Plug.Conn{halted: true} = conn, _pid, _method), do: conn
 
   defp check_lifecycle_gate(conn, _pid, method) when method in @lifecycle_exempt_methods do
@@ -191,7 +188,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec missing_session_header(Plug.Conn.t()) :: Plug.Conn.t()
   defp missing_session_header(conn) do
     request_id = conn.body_params["id"]
     data = %{error: "Missing Mcp-Session-Id header. Initialize first."}
@@ -202,7 +198,6 @@ defmodule Wymcp.Plugs.Session do
     |> send_json(response)
   end
 
-  @spec session_terminated(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   defp session_terminated(conn, session_id) do
     request_id = conn.body_params["id"]
     method = conn.body_params["method"]
@@ -232,7 +227,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec session_not_ready(Plug.Conn.t()) :: Plug.Conn.t()
   defp session_not_ready(conn) do
     request_id = conn.body_params["id"]
     data = %{error: "Session not yet initialized. Send notifications/initialized first."}
@@ -243,7 +237,6 @@ defmodule Wymcp.Plugs.Session do
     |> send_json(response)
   end
 
-  @spec check_protocol_version(Plug.Conn.t(), pid()) :: Plug.Conn.t()
   defp check_protocol_version(conn, pid) do
     expected = Session.protocol_version(pid)
 
@@ -254,7 +247,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec enforce_protocol_version_header(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   defp enforce_protocol_version_header(conn, expected) do
     case get_req_header(conn, "mcp-protocol-version") do
       [^expected] ->
@@ -270,7 +262,6 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  @spec protocol_version_mismatch(Plug.Conn.t()) :: Plug.Conn.t()
   defp protocol_version_mismatch(conn) do
     request_id = conn.body_params["id"]
 

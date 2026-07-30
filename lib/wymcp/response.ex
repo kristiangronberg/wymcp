@@ -13,7 +13,6 @@ defmodule Wymcp.Response do
 
   import Plug.Conn
 
-  @spec send_json(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def send_json(%Plug.Conn{} = conn, %{} = response) do
     body = JSON.encode!(response)
     status = conn.status || 200

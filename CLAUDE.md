@@ -15,19 +15,17 @@ mix format                                  # format code (imports Plug conventi
 mix credo --strict                          # lint (Credo + ex_slop checks)
 mix deps.audit                              # scan mix.lock for known CVEs
 mix test.watch                              # auto-run on file change (dev)
-mix dialyzer                                # static type analysis
 ```
 
 `mix precommit` is the all-or-nothing gate run before committing. It chains
 (in the `:test` env): `compile --warnings-as-errors`, `deps.unlock --unused`,
-`format`, `credo --strict`, `deps.audit`, `test --warnings-as-errors`,
-`dialyzer`. Run it and get a green exit before committing. (CI should swap `format` → `format
---check-formatted` so unformatted code fails instead of being silently
-rewritten.)
+`format`, `credo --strict`, `deps.audit`, and `test --warnings-as-errors`.
+Run it and get a green exit before committing. (CI should swap `format` →
+`format --check-formatted` so unformatted code fails instead of being
+silently rewritten.)
 
-Static-analysis tooling is configured in `.credo.exs` (Credo + ex_slop, with
-two domain-appropriate tunings noted inline) and `.dialyzer_ignore.exs`. The
-rationale and rollout are documented in `docs/coding_tool_setup.md`.
+Static-analysis tooling is configured in `.credo.exs` (Credo + ex_slop,
+with domain-appropriate tunings noted inline).
 
 ## Architecture
 
@@ -88,23 +86,9 @@ Prefer full-length names (`request`, `config`, `definition`) over
 abbreviations (`req`, `cfg`, `defn`). Short names are reserved for
 local pattern variables where the type is obvious from context.
 
-## Dialyzer
+## Type checking
 
-The project runs with `:unmatched_returns`, `:error_handling`, and
-`:underspecs` enabled. When dialyzer flags a warning, prefer these fixes
-in order:
-
-1. **Narrow the spec** if it's broader than the function actually returns
-   (e.g., drop an unreachable `{:error, term()}` branch, replace `atom()`
-   with the concrete union).
-2. **Bind discarded results** with `_ =` when the return is intentionally
-   ignored (fire-and-forget notifications, telemetry calls, `query!`-style
-   calls whose crash-on-error is the point).
-3. **Add to `.dialyzer_ignore.exs`** only when the warning originates
-   from a library macro expansion or from a helper whose spec is
-   intentionally broad (generic accessors, enum-list returns like
-   `valid_actions/0`).
-
-The ignore file is grouped by category with a rationale on each block —
-read it before adding entries, and keep `list_unused_filters: true`
-enabled so stale entries surface.
+There is no Dialyzer and no `@spec` in this repository (removed in 0.8.2).
+The type gate is `compile --warnings-as-errors` in `mix precommit`. See the
+elixir-coding-standards skill for the rationale and for the guard and
+documentation conventions that replace `@spec`.

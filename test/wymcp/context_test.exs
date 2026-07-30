@@ -374,7 +374,6 @@ defmodule Wymcp.ContextTest do
     end
   end
 
-  @spec build_session_context(map()) :: {Context.t(), pid()}
   defp build_session_context(client_capabilities) do
     {:ok, session_pid, session_id} =
       Session.start_session(%{
@@ -407,7 +406,6 @@ defmodule Wymcp.ContextTest do
     {ctx, stream_pid}
   end
 
-  @spec fake_stream_loop(pid()) :: no_return()
   defp fake_stream_loop(test_pid) do
     receive do
       {:"$gen_call", from, {:push, message}} ->

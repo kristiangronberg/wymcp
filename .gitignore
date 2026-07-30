@@ -2,7 +2,6 @@
 /cover/
 /deps/
 /doc/
-/priv/plts/
 /tmp/
 *.ez
 CLAUDE.local.md

@@ -26,7 +26,6 @@ defmodule Wymcp.Transport.SSE do
   See: `Wymcp.Transport.SSETest`
   """
 
-  @spec encode(map(), String.t() | nil) :: String.t()
   def encode(message, nil) do
     "data: #{JSON.encode!(message)}\n\n"
   end
@@ -35,7 +34,6 @@ defmodule Wymcp.Transport.SSE do
     "id: #{event_id}\ndata: #{JSON.encode!(message)}\n\n"
   end
 
-  @spec encode_empty(String.t()) :: String.t()
   def encode_empty(event_id) do
     "id: #{event_id}\ndata: \n\n"
   end

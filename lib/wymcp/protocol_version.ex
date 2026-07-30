@@ -102,29 +102,21 @@ defmodule Wymcp.ProtocolVersion do
   @supported ~w(2025-11-25 2025-06-18 2025-03-26)
   @since_2025_06_18 ~w(2025-11-25 2025-06-18)
 
-  @spec supported() :: [String.t(), ...]
   def supported, do: @supported
 
-  @spec latest() :: String.t()
   def latest, do: hd(@supported)
 
-  @spec supported?(String.t() | nil | term()) :: boolean()
   def supported?(version) when is_binary(version), do: version in @supported
   def supported?(_), do: false
 
-  @spec supports_output_schema?(String.t()) :: boolean()
   def supports_output_schema?(version), do: version in @since_2025_06_18
 
-  @spec supports_tool_title?(String.t()) :: boolean()
   def supports_tool_title?(version), do: version in @since_2025_06_18
 
-  @spec supports_protocol_version_header?(String.t()) :: boolean()
   def supports_protocol_version_header?(version), do: version in @since_2025_06_18
 
-  @spec supports_elicitation?(String.t()) :: boolean()
   def supports_elicitation?(version), do: version in @since_2025_06_18
 
-  @spec supports_server_info_extensions?(String.t()) :: boolean()
   def supports_server_info_extensions?(version), do: version in @since_2025_06_18
 
   @doc """
@@ -135,7 +127,6 @@ defmodule Wymcp.ProtocolVersion do
   Strips `"outputSchema"` and `"title"` for `2025-03-26`; returns the
   definition unchanged for `2025-06-18` and `2025-11-25`.
   """
-  @spec strip_tool_definition(map(), String.t()) :: map()
   def strip_tool_definition(definition, version) do
     definition
     |> maybe_drop("outputSchema", supports_output_schema?(version))
@@ -151,7 +142,6 @@ defmodule Wymcp.ProtocolVersion do
   produced by `Wymcp.Context.json/1` carries the same payload, so older
   clients still get the data — just as a JSON-stringified text block.
   """
-  @spec strip_tool_call_result(map(), String.t()) :: map()
   def strip_tool_call_result(result, version) do
     maybe_drop(result, "structuredContent", supports_output_schema?(version))
   end
@@ -169,7 +159,6 @@ defmodule Wymcp.ProtocolVersion do
   since the `2025-03-26` floor and therefore needs no gating. If the
   supported floor ever drops to `2024-11-05`, revisit this comment.
   """
-  @spec strip_server_info(map(), String.t()) :: map()
   def strip_server_info(server_info, version) do
     if supports_server_info_extensions?(version) do
       server_info
@@ -178,7 +167,6 @@ defmodule Wymcp.ProtocolVersion do
     end
   end
 
-  @spec maybe_drop(map(), String.t(), boolean()) :: map()
   defp maybe_drop(map, _key, true), do: map
   defp maybe_drop(map, key, false), do: Map.delete(map, key)
 end

@@ -123,11 +123,9 @@ defmodule Wymcp.Server do
       @behaviour Wymcp.Server
 
       @impl Wymcp.Server
-      @spec init(map(), map()) :: {:ok, map()} | {:error, term()}
       def init(_client_info, assigns), do: {:ok, assigns}
 
       @impl Wymcp.Server
-      @spec terminate(term(), map()) :: :ok
       def terminate(_reason, _assigns), do: :ok
 
       defoverridable init: 2, terminate: 2

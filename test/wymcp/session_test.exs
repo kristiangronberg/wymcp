@@ -785,7 +785,6 @@ defmodule Wymcp.SessionTest do
     end
   end
 
-  @spec start_ready_session() :: {:ok, pid(), String.t()}
   defp start_ready_session do
     {:ok, pid, id} =
       Session.start_session(%{
@@ -800,7 +799,6 @@ defmodule Wymcp.SessionTest do
     {:ok, pid, id}
   end
 
-  @spec spawn_fake_stream(pid()) :: pid()
   defp spawn_fake_stream(session_pid) do
     test_pid = self()
 
@@ -814,7 +812,6 @@ defmodule Wymcp.SessionTest do
     stream_pid
   end
 
-  @spec receive_loop(pid()) :: no_return()
   defp receive_loop(test_pid) do
     receive do
       {:"$gen_call", from, {:push, message}} ->

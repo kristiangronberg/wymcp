@@ -19,7 +19,6 @@ defmodule Wymcp.Plugs.Validate do
     end
   end
 
-  @spec validate_request(Plug.Conn.t()) :: Plug.Conn.t()
   defp validate_request(conn) do
     request = conn.body_params
 

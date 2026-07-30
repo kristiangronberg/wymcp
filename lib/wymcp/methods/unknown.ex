@@ -4,7 +4,6 @@ defmodule Wymcp.Methods.Unknown do
   import Wymcp.Response
   alias Wymcp.JsonRpc
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(%Plug.Conn{} = conn) do
     request = conn.body_params
     data = %{original_request: request}

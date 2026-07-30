@@ -124,7 +124,6 @@ defmodule Wymcp.Router do
     super(opts)
   end
 
-  @spec validate_reserved_tool_names!([module()]) :: :ok
   defp validate_reserved_tool_names!(tools) do
     case Enum.find(tools, &(&1.name() == Wymcp.Help.name())) do
       nil ->
@@ -137,13 +136,11 @@ defmodule Wymcp.Router do
     end
   end
 
-  @spec validate_action_schemas!([module(), ...]) :: :ok
   defp validate_action_schemas!(tools) do
     Enum.each(tools, &Wymcp.Tool.validate_actions!/1)
     :ok
   end
 
-  @spec validate_unique_tool_names!([module()]) :: :ok
   defp validate_unique_tool_names!(tools) do
     names = Enum.map(tools, & &1.name())
 
@@ -180,7 +177,6 @@ defmodule Wymcp.Router do
           "invalid :www_authenticate option #{inspect(other)} — expected a keyword list"
   end
 
-  @spec validate_server_module(module() | nil) :: :ok
   defp validate_server_module(nil), do: :ok
 
   defp validate_server_module(module) when is_atom(module) do

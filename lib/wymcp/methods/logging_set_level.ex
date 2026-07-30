@@ -4,7 +4,6 @@ defmodule Wymcp.Methods.LoggingSetLevel do
   import Wymcp.Response
   alias Wymcp.{JsonRpc, Session}
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(%Plug.Conn{} = conn) do
     request = conn.body_params
     params = request["params"] || %{}

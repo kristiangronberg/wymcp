@@ -11,7 +11,6 @@ defmodule Wymcp.JsonRpc do
   }
   @error_types Map.keys(@error_type_map)
 
-  @spec success_response(term(), map()) :: map()
   def success_response(request_id, result) do
     %{
       "jsonrpc" => "2.0",
@@ -28,7 +27,6 @@ defmodule Wymcp.JsonRpc do
           | :internal_error
           | :session_not_found
 
-  @spec error_response(error_type(), term()) :: %{required(String.t()) => term()}
   def error_response(error_type, request_id) when error_type in @error_types do
     {code, message} = Map.get(@error_type_map, error_type)
 
@@ -42,7 +40,6 @@ defmodule Wymcp.JsonRpc do
     }
   end
 
-  @spec error_response(error_type(), term(), term()) :: %{required(String.t()) => term()}
   def error_response(error_type, request_id, data) when error_type in @error_types do
     {code, message} = Map.get(@error_type_map, error_type)
 
@@ -74,18 +71,15 @@ defmodule Wymcp.JsonRpc do
                           "$defs" => @defs
                         })
 
-  @spec validate_mcp_request(String.t(), map()) :: :ok | {:error, String.t()}
   def validate_mcp_request("JSONRPCMessage", data) do
     do_validate(@jsonrpc_message_root, data)
   end
 
-  @spec validate_schema(map(), map()) :: :ok | {:error, String.t()}
   def validate_schema(schema, data) do
     root = JSV.build!(schema)
     do_validate(root, data)
   end
 
-  @spec do_validate(JSV.Root.t(), term()) :: :ok | {:error, String.t()}
   defp do_validate(root, data) do
     case JSV.validate(data, root) do
       {:ok, _cast_data} -> :ok
@@ -93,7 +87,6 @@ defmodule Wymcp.JsonRpc do
     end
   end
 
-  @spec format_error(JSV.ValidationError.t()) :: String.t()
   defp format_error(%JSV.ValidationError{} = error) do
     error
     |> JSV.normalize_error()

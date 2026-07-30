@@ -130,14 +130,18 @@ defmodule Wymcp.Session do
           }
   end
 
-  @spec start_link({String.t(), map()}) :: GenServer.on_start()
   def start_link({session_id, opts}) do
     GenServer.start_link(__MODULE__, {session_id, opts},
       name: {:via, Registry, {Wymcp.Session.Registry, session_id}}
     )
   end
 
-  @spec start_session(map()) :: {:ok, pid(), String.t()} | {:error, term()}
+  @doc """
+  Starts a session under the session supervisor and returns
+  `{:ok, pid, session_id}` — a three-element tuple, not the usual
+  `{:ok, pid}`: the generated session id is the value the transport
+  layer must echo in the `Mcp-Session-Id` response header.
+  """
   def start_session(opts) do
     session_id = generate_session_id()
 
@@ -150,7 +154,6 @@ defmodule Wymcp.Session do
     end
   end
 
-  @spec lookup(String.t()) :: {:ok, pid()} | {:error, :not_found}
   def lookup(session_id) do
     case Registry.lookup(Wymcp.Session.Registry, session_id) do
       [{pid, _}] -> {:ok, pid}
@@ -158,7 +161,12 @@ defmodule Wymcp.Session do
     end
   end
 
-  @spec get_state(pid() | String.t()) :: struct()
+  @doc """
+  Returns the session's full state struct. Accepts a pid or a session-id
+  binary. Unlike the `get_X/1` convention this raises on an unknown
+  session id instead of returning an error tuple — every caller runs
+  after session resolution, where a missing session is a bug.
+  """
   def get_state(pid) when is_pid(pid), do: GenServer.call(pid, :get_state)
 
   def get_state(session_id) when is_binary(session_id) do
@@ -168,27 +176,22 @@ defmodule Wymcp.Session do
     end
   end
 
-  @spec put_assigns(pid(), map()) :: :ok
   def put_assigns(pid, assigns) when is_map(assigns) do
     GenServer.call(pid, {:put_assigns, assigns})
   end
 
-  @spec touch(pid()) :: :ok
   def touch(pid) do
     GenServer.cast(pid, :touch)
   end
 
-  @spec mark_ready(pid()) :: :ok
   def mark_ready(pid) do
     GenServer.call(pid, :mark_ready)
   end
 
-  @spec ready?(pid()) :: boolean()
   def ready?(pid) do
     GenServer.call(pid, :ready?)
   end
 
-  @spec protocol_version(pid()) :: String.t()
   def protocol_version(pid) do
     GenServer.call(pid, :protocol_version)
   end
@@ -212,7 +215,6 @@ defmodule Wymcp.Session do
   `Methods.ToolsList`, `Methods.ToolsCall`, and `Wymcp.Context.elicit/4`.
   Adding a fourth call site? Use this function — do not re-derive.
   """
-  @spec negotiated_version(Plug.Conn.t()) :: String.t()
   def negotiated_version(%Plug.Conn{} = conn) do
     case conn.assigns[:wymcp_session_pid] do
       pid when is_pid(pid) -> protocol_version(pid)
@@ -261,7 +263,6 @@ defmodule Wymcp.Session do
   the same treatment `init/2` returning `{:error, reason}` gets. Registering
   from anywhere else, the `ArgumentError` is yours to handle.
   """
-  @spec register_tool(pid(), module()) :: :ok
   def register_tool(pid, tool_module) do
     validate_registerable!(tool_module)
     GenServer.call(pid, {:register_tool, tool_module})
@@ -277,7 +278,6 @@ defmodule Wymcp.Session do
       # Revoke admin access mid-session
       Wymcp.Session.unregister_tool(session_pid, "administer_users")
   """
-  @spec unregister_tool(pid(), String.t()) :: :ok
   def unregister_tool(pid, tool_name) do
     GenServer.call(pid, {:unregister_tool, tool_name})
   end
@@ -287,14 +287,12 @@ defmodule Wymcp.Session do
   take precedence when a name collision occurs — compile-time tools with
   the same name are excluded from the result.
   """
-  @spec get_tools(pid()) :: [module()]
   def get_tools(pid) do
     GenServer.call(pid, :get_tools)
   end
 
   @log_levels ~w(debug info notice warning error critical alert emergency)
 
-  @spec set_log_level(pid(), String.t()) :: :ok | {:error, :invalid_level}
   def set_log_level(pid, level) do
     GenServer.call(pid, {:set_log_level, level})
   end
@@ -309,7 +307,6 @@ defmodule Wymcp.Session do
 
   Pass `nil` to explicitly clear the stream (e.g. on graceful close).
   """
-  @spec register_stream(pid(), pid() | nil) :: :ok
   def register_stream(pid, stream_pid) do
     GenServer.call(pid, {:register_stream, stream_pid})
   end
@@ -321,7 +318,6 @@ defmodule Wymcp.Session do
   This is the function that sampling/elicitation (Plan 4) will call to
   send server-initiated requests to the client.
   """
-  @spec push_event(pid(), map()) :: :ok | {:error, :no_stream}
   def push_event(pid, message) do
     GenServer.call(pid, {:push_event, message})
   end
@@ -340,8 +336,6 @@ defmodule Wymcp.Session do
   connected. Returns `{:error, :timeout}` if the client does not
   respond within `timeout` milliseconds.
   """
-  @spec await_client_response(pid(), term(), map(), pos_integer()) ::
-          {:ok, map()} | {:error, :no_stream | :timeout | map()}
   def await_client_response(pid, request_id, message, timeout) do
     GenServer.call(pid, {:await_client_response, request_id, message, timeout}, timeout + 1000)
   end
@@ -357,22 +351,18 @@ defmodule Wymcp.Session do
   Silently ignores responses for unknown request_ids (the request may
   have already timed out).
   """
-  @spec deliver_response(pid(), term(), {:ok, map()} | {:error, map()}) :: :ok
   def deliver_response(pid, request_id, result_or_error) do
     GenServer.cast(pid, {:deliver_response, request_id, result_or_error})
   end
 
-  @spec track_request(pid(), term(), String.t()) :: :ok
   def track_request(pid, request_id, method) do
     GenServer.call(pid, {:track_request, request_id, method})
   end
 
-  @spec complete_request(pid(), term()) :: :ok
   def complete_request(pid, request_id) do
     GenServer.call(pid, {:complete_request, request_id})
   end
 
-  @spec terminate_session(String.t()) :: :ok | {:error, :not_found}
   def terminate_session(session_id) do
     case lookup(session_id) do
       {:ok, pid} ->
@@ -557,7 +547,6 @@ defmodule Wymcp.Session do
 
   # -- Notifications --
 
-  @spec notify_tools_list_changed(State.t()) :: :ok
   defp notify_tools_list_changed(%{stream_pid: nil}), do: :ok
 
   defp notify_tools_list_changed(%{stream_pid: stream_pid}) do
@@ -572,18 +561,15 @@ defmodule Wymcp.Session do
 
   # -- Idle timeout --
 
-  @spec schedule_idle_timeout(pos_integer()) :: reference()
   defp schedule_idle_timeout(timeout) do
     Process.send_after(self(), :session_expired, timeout)
   end
 
-  @spec reset_idle_timeout(State.t()) :: State.t()
   defp reset_idle_timeout(state) do
     _ = if state.idle_timer_ref, do: Process.cancel_timer(state.idle_timer_ref)
     %{state | idle_timer_ref: schedule_idle_timeout(state.idle_timeout)}
   end
 
-  @spec merge_tools(State.t()) :: [module()]
   defp merge_tools(%State{tools: compile_tools, runtime_tools: runtime_tools}) do
     runtime_names = MapSet.new(runtime_tools, & &1.name())
     filtered_compile = Enum.reject(compile_tools, &(&1.name() in runtime_names))
@@ -593,7 +579,6 @@ defmodule Wymcp.Session do
   # Runs in the caller's process so a bad module fails the registering code
   # path, not the session. The name/0 call also forces the module load (BEAM
   # loads lazily) before validate_actions!/1 reads actions/0.
-  @spec validate_registerable!(module()) :: :ok
   defp validate_registerable!(tool_module) do
     if tool_module.name() == Wymcp.Help.name() do
       raise ArgumentError,
@@ -604,14 +589,12 @@ defmodule Wymcp.Session do
     Wymcp.Tool.validate_actions!(tool_module)
   end
 
-  @spec generate_session_id() :: String.t()
   defp generate_session_id do
     :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
   end
 
   # -- Version negotiation --
 
-  @spec version_from_header(Plug.Conn.t()) :: String.t()
   defp version_from_header(conn) do
     case Plug.Conn.get_req_header(conn, "mcp-protocol-version") do
       [version] ->

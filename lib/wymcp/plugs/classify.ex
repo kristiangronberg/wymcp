@@ -9,12 +9,10 @@ defmodule Wymcp.Plugs.Classify do
   def init(opts), do: opts
 
   @impl Plug
-  @spec call(Plug.Conn.t(), term()) :: Plug.Conn.t()
   def call(%Plug.Conn{} = conn, _opts) do
     assign(conn, :wymcp_message_type, classify(conn.body_params))
   end
 
-  @spec classify(map()) :: :request | :notification | :response | :unknown
   defp classify(%{"method" => method, "id" => _id}) when is_binary(method), do: :request
   defp classify(%{"method" => method}) when is_binary(method), do: :notification
   defp classify(%{"id" => _id, "result" => _result}), do: :response

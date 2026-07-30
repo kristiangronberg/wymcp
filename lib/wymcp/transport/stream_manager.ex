@@ -27,8 +27,13 @@ defmodule Wymcp.Transport.StreamManager do
 
   Each SSE event gets a monotonically increasing integer ID. Clients
   use `Last-Event-ID` on reconnection to indicate the last event they
-  received. Full replay is out of scope — the ID is logged for
-  debugging and the stream resumes from the current position.
+  received. Full replay is out of scope — no missed events are re-sent;
+  the counter resumes after the client's last seen event
+  (`Last-Event-ID: evt-7` makes the priming event `evt-8`).
+
+  The header is raw client input: an id that does not read as
+  `evt-<non-negative integer>` is not an error — the counter simply
+  resumes from 0.
 
   ```mermaid
   flowchart TD
@@ -62,6 +67,10 @@ defmodule Wymcp.Transport.StreamManager do
 
   @default_keepalive_interval :timer.seconds(15)
 
+  # Single owner of the event-id grammar; minted by event_id/1, parsed by
+  # resume_counter/1 — change all three together or reconnects resume from 0.
+  @event_id_prefix "evt-"
+
   defmodule State do
     @moduledoc false
     defstruct [
@@ -94,7 +103,6 @@ defmodule Wymcp.Transport.StreamManager do
           optional(:last_event_id) => String.t() | nil
         }
 
-  @spec start_link(start_opts()) :: GenServer.on_start()
   def start_link(%{session_pid: nil}), do: {:error, :no_session}
 
   def start_link(%{conn: conn, session_pid: session_pid} = opts) do
@@ -112,7 +120,6 @@ defmodule Wymcp.Transport.StreamManager do
   Returns `:ok` on success or `{:error, :disconnected}` if the chunk
   write fails (client has disconnected).
   """
-  @spec push(pid(), map()) :: :ok | {:error, :disconnected}
   def push(pid, message) do
     GenServer.call(pid, {:push, message})
   end
@@ -120,7 +127,6 @@ defmodule Wymcp.Transport.StreamManager do
   @doc """
   Gracefully shuts down the stream, closing the connection.
   """
-  @spec shutdown(pid()) :: :ok
   def shutdown(pid) do
     GenServer.stop(pid, :normal)
   end
@@ -159,7 +165,7 @@ defmodule Wymcp.Transport.StreamManager do
 
   @impl GenServer
   def handle_call({:push, message}, _from, state) do
-    event_id = "evt-#{state.event_counter + 1}"
+    event_id = event_id(state.event_counter + 1)
 
     case SSEStream.push(state.conn, message, event_id) do
       {:ok, conn} ->
@@ -198,16 +204,9 @@ defmodule Wymcp.Transport.StreamManager do
 
   # -- Private --
 
-  @spec send_priming_event(Plug.Conn.t(), String.t() | nil) :: {Plug.Conn.t(), non_neg_integer()}
   defp send_priming_event(conn, last_event_id) do
-    # Start event counter after the last known event, or from 0
-    start_counter =
-      case last_event_id do
-        "evt-" <> n -> String.to_integer(n)
-        _ -> 0
-      end
-
-    event_id = "evt-#{start_counter + 1}"
+    start_counter = resume_counter(last_event_id)
+    event_id = event_id(start_counter + 1)
 
     case SSEStream.push_empty(conn, event_id) do
       {:ok, conn} -> {conn, start_counter + 1}
@@ -215,7 +214,18 @@ defmodule Wymcp.Transport.StreamManager do
     end
   end
 
-  @spec schedule_keepalive(pos_integer()) :: reference()
+  defp event_id(counter), do: @event_id_prefix <> Integer.to_string(counter)
+
+  # Last-Event-ID is raw client input; never assume the suffix is numeric.
+  defp resume_counter(@event_id_prefix <> suffix) do
+    case Integer.parse(suffix) do
+      {value, ""} when value >= 0 -> value
+      _ -> 0
+    end
+  end
+
+  defp resume_counter(_last_event_id), do: 0
+
   defp schedule_keepalive(interval) do
     Process.send_after(self(), :keepalive, interval)
   end

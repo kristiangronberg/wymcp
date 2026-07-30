@@ -36,7 +36,6 @@ defmodule Wymcp.Hint do
           example: map() | nil
         }
 
-  @spec new(keyword() | map()) :: t()
   def new(attrs) when is_list(attrs) do
     new(Map.new(attrs))
   end
@@ -47,7 +46,6 @@ defmodule Wymcp.Hint do
     hint
   end
 
-  @spec validate!(t()) :: :ok
   defp validate!(%__MODULE__{tool: tool, action: action}) do
     unless is_binary(tool) do
       raise ArgumentError, "Wymcp.Hint :tool must be a string, got: #{inspect(tool)}"

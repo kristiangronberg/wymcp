@@ -67,7 +67,6 @@ defmodule Wymcp.Help do
   def output_schema, do: nil
 
   @doc false
-  @spec input_schema() :: Schema.json_schema()
   def input_schema do
     %{
       "type" => "object",
@@ -86,13 +85,11 @@ defmodule Wymcp.Help do
   end
 
   @doc false
-  @spec definition() :: %{required(String.t()) => term()}
   def definition do
     %{"name" => @name, "description" => @description, "inputSchema" => input_schema()}
   end
 
   @doc false
-  @spec run(Context.t(), map()) :: {:ok, Context.content()} | {:error, String.t()}
   def run(%Context{} = ctx, params) when is_map(params) do
     tool_name = params["tool"]
     action_name = params["action"]
@@ -107,13 +104,10 @@ defmodule Wymcp.Help do
     answer(Session.get_tools(ctx.session_pid), tool_name, action_name, ctx)
   end
 
-  @spec level(term(), term()) :: :index | :tool | :action
   defp level(nil, nil), do: :index
   defp level(_tool, nil), do: :tool
   defp level(_tool, _action), do: :action
 
-  @spec answer([module()], term(), term(), Context.t()) ::
-          {:ok, Context.content()} | {:error, String.t()}
   defp answer(tools, nil, nil, _ctx) do
     {:ok, Context.json(index(tools))}
   end
@@ -130,12 +124,10 @@ defmodule Wymcp.Help do
     end
   end
 
-  @spec index([module()]) :: %{tools: [map()]}
   defp index(tools) do
     %{tools: Enum.map(tools, &index_entry/1)}
   end
 
-  @spec index_entry(module()) :: map()
   defp index_entry(module) do
     %{
       tool: module.name(),
@@ -144,7 +136,6 @@ defmodule Wymcp.Help do
     }
   end
 
-  @spec tool_level(module()) :: map()
   defp tool_level(module) do
     actions =
       Map.new(module.actions(), fn {action, schema} ->
@@ -154,8 +145,6 @@ defmodule Wymcp.Help do
     %{tool: module.name(), description: module.description(), actions: actions}
   end
 
-  @spec action_level(module(), String.t(), Context.t()) ::
-          {:ok, Context.content()} | {:error, String.t()}
   defp action_level(module, action_name, ctx) do
     actions = module.actions()
 
@@ -173,7 +162,6 @@ defmodule Wymcp.Help do
     end
   end
 
-  @spec render_action(map()) :: %{required(atom()) => term()}
   defp render_action(schema) do
     %{
       description: schema.description,
@@ -183,7 +171,6 @@ defmodule Wymcp.Help do
     |> Map.merge(Map.take(schema, [:required_one_of, :defaults, :notes, :related, :examples]))
   end
 
-  @spec add_context(map(), module(), atom(), Context.t()) :: map()
   defp add_context(response, module, action, ctx) do
     # Hand-written tools need not export action_context/2; function_exported?
     # is reliable here only after a load (BEAM loads modules lazily) — every
@@ -198,8 +185,6 @@ defmodule Wymcp.Help do
     end
   end
 
-  @spec unknown_target(:missing_tool | :unknown_tool, String.t(), [module()]) ::
-          {:error, String.t()}
   defp unknown_target(:missing_tool, action_name, tools) do
     {:error,
      JSON.encode!(%{
@@ -221,6 +206,5 @@ defmodule Wymcp.Help do
      })}
   end
 
-  @spec tool_names([module()]) :: [String.t()]
   defp tool_names(tools), do: tools |> Enum.map(& &1.name()) |> Enum.sort()
 end

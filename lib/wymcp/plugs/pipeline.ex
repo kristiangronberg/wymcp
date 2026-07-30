@@ -19,7 +19,6 @@ defmodule Wymcp.Plugs.Pipeline do
                   json_decoder: JSON
                 )
 
-  @spec parse_body(Plug.Conn.t(), term()) :: Plug.Conn.t()
   defp parse_body(conn, _opts) do
     Plug.Parsers.call(conn, @parsers_opts)
   rescue

@@ -59,7 +59,6 @@ defmodule Wymcp.Methods.DeliverResponseTest do
     assert result_conn.halted
   end
 
-  @spec start_ready_session() :: {:ok, pid(), String.t()}
   defp start_ready_session do
     {:ok, pid, id} =
       Session.start_session(%{

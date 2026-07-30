@@ -4,7 +4,6 @@ defmodule Wymcp.Methods.Ping do
   import Wymcp.Response
   alias Wymcp.JsonRpc
 
-  @spec run(Plug.Conn.t()) :: Plug.Conn.t()
   def run(conn) do
     request = conn.body_params
     response = JsonRpc.success_response(request["id"], %{})

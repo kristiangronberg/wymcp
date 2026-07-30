@@ -6,25 +6,13 @@ defmodule Wymcp.MixProject do
   def project do
     [
       app: :wymcp,
-      version: "0.8.1",
+      version: "0.8.2",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
       description: "Model Context Protocol server library for Elixir with Plug integration",
       package: package(),
-      dialyzer: [
-        plt_add_apps: [:mix, :ex_unit],
-        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-        flags: [
-          :unmatched_returns,
-          :error_handling,
-          :underspecs
-        ],
-        ignore_warnings: ".dialyzer_ignore.exs",
-        list_unused_filters: true,
-        format: "dialyxir"
-      ],
       name: "Wymcp",
       source_url: @source_url,
       homepage_url: @source_url,
@@ -61,15 +49,13 @@ defmodule Wymcp.MixProject do
 
   defp aliases do
     [
-      "dialyzer.watch": fn _args -> Mix.Task.run("dialyzer", []) end,
       precommit: [
         "compile --warnings-as-errors",
         "deps.unlock --unused",
         "format",
         "credo --strict",
         "deps.audit",
-        "test --warnings-as-errors",
-        "dialyzer"
+        "test --warnings-as-errors"
       ]
     ]
   end
@@ -77,7 +63,6 @@ defmodule Wymcp.MixProject do
   defp deps do
     [
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
       {:jsv, "~> 0.16"},
