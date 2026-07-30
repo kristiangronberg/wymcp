@@ -12,6 +12,10 @@ parameter also holds an action name — a reference to this concept, not a
 second meaning. The elicitation-response `"action"` field
 (accept/decline/cancel) is an unrelated, spec-fixed wire collision.
 
+**action summary**
+`Wymcp.Tool.Schema.action_summaries/1`
+_Avoid_: one-liner, one-line description
+
 **help**
 The framework-owned introspection tool — the server's entire introspection
 surface; defined at its code home, `Wymcp.Help` (moduledoc).
@@ -39,7 +43,7 @@ end collect the synonym sets that span entries.
 - **defaults** — default values merged into `data` after validation, before dispatch. (`Wymcp.Tool`)
 - **notes / related / examples** — optional documentation fields on an action schema; surfaced by the help tool at tool and action level. (`Wymcp.Tool`, CHANGELOG 0.5.0)
 - **definition** — a tool's full MCP wire definition emitted in `tools/list`: name, description, inputSchema, optional title/annotations/outputSchema. (`Wymcp.Tool`)
-- **input schema** (`inputSchema` on the wire) — the JSON Schema for a tool's arguments, generated from its actions: an action enum with one-line descriptions plus a bare `data` object. (`Wymcp.Tool.Schema`)
+- **input schema** (`inputSchema` on the wire) — the JSON Schema for a tool's arguments, generated from its actions: an action enum whose description carries the action summaries, plus a bare `data` object. (`Wymcp.Tool.Schema`)
 - **output schema** (`outputSchema`) — optional JSON Schema validating a tool's structured result; enables `structuredContent`; version-gated. (`Wymcp.Tool`, `Wymcp.Methods.ToolsCall`)
 - **structuredContent** — the structured response object validated against the output schema, sent alongside `content`. (`Wymcp.Methods.ToolsCall`)
 - **annotations** — optional tool metadata (readOnlyHint, destructiveHint, idempotentHint, openWorldHint). **Overloaded:** the protocol schema also has `Annotations` for *content* metadata (audience, priority, lastModified) — two different definitions. (`Wymcp.Tool`, priv/schema.json)
@@ -156,6 +160,7 @@ define sessions:
 - **schema ×many** — action schema (authoring map) vs JSON Schema maps vs priv/schema.json (protocol document) vs inputSchema/outputSchema/requestedSchema (wire fields).
 - **annotations ×2** — tool behavior hints vs content metadata.
 - **name ×many** — tool name, action name, serverInfo.name, property name.
+- **description ×4** — tool-level `description()` callback vs action-schema `:description` vs the JSON Schema property `"description"` vs `serverInfo.description`.
 - **run ×3** — `Methods.*.run`, generated `Tool.run/2`, `run_action/3`.
 - **negotiated version ≈ protocol version ≈ revision ≈ protocolVersion** — one concept, four spellings across resolver, state, prose, and wire.
 - **session assigns ≈ per-session state ≈ per-session assigns** — one concept in prose.

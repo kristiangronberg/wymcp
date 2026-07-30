@@ -39,10 +39,13 @@ defmodule Wymcp.Tool.Schema do
   end
 
   @doc """
-  One-line `"name: description"` summaries for every action, sorted by
-  action name. Single content source for both the `tools/list` description
-  string and the help tool's server index — the two render from the same
-  list and cannot drift.
+  An action summary is one action's name joined to its description as
+  `"<action>: <description>"`. Returns one summary per action, sorted by
+  action name.
+
+  Single content source for both the `tools/list` action description and the
+  help tool's server index — the two render from the same list and cannot
+  drift.
   """
   @spec action_summaries(map()) :: [String.t()]
   def action_summaries(actions) when is_map(actions) do
