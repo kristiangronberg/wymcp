@@ -385,6 +385,82 @@ defmodule Wymcp.RouterTest do
     def output_schema, do: nil
   end
 
+  defmodule NewlineDescriptionTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "newline_description"
+    def description, do: "An action description contains a newline"
+
+    def actions do
+      %{op: %{description: "First line\nsecond line", properties: %{}}}
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule NewlineActionNameTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "newline_action_name"
+    def description, do: "An action name contains a newline"
+
+    def actions do
+      %{:"first\nsecond" => %{description: "Valid description", properties: %{}}}
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule StringActionNameTool do
+    @behaviour Wymcp.Tool
+
+    def name, do: "string_action_name"
+    def description, do: "An action name is a string, not an atom"
+
+    def actions do
+      %{"op" => %{description: "Valid description", properties: %{}}}
+    end
+
+    def run_action(_, _, _), do: {:ok, %{}}
+    def hints(_, _), do: []
+    def handle_error(_), do: ""
+    def action_context(_, _), do: nil
+    def title, do: nil
+    def annotations, do: nil
+    def output_schema, do: nil
+  end
+
+  defmodule MultilineNotesTool do
+    use Wymcp.Tool
+
+    def name, do: "multiline_notes"
+    def description, do: "Notes carry multi-paragraph Markdown"
+
+    def actions do
+      %{
+        op: %{
+          description: "Valid description",
+          properties: %{},
+          notes: "Overview.\n\n## Components\n\nDetails."
+        }
+      }
+    end
+
+    def run_action(_action, _data, _ctx), do: {:ok, %{}}
+  end
+
   defmodule OneOfTool do
     use Wymcp.Tool
 
@@ -406,6 +482,22 @@ defmodule Wymcp.RouterTest do
     end
 
     def run_action(:identify, data, _ctx), do: {:ok, %{found: data}}
+  end
+
+  defmodule MultiActionTool do
+    use Wymcp.Tool
+
+    def name, do: "multi_action"
+    def description, do: "A tool with two actions"
+
+    def actions do
+      %{
+        alpha: %{description: "Do alpha", properties: %{}, required: [], defaults: %{}},
+        beta: %{description: "Do beta", properties: %{}, required: [], defaults: %{}}
+      }
+    end
+
+    def run_action(_action, _data, _ctx), do: {:ok, %{}}
   end
 
   defp call_router(body, opts \\ []) do
@@ -719,6 +811,19 @@ defmodule Wymcp.RouterTest do
       resp = JSON.decode!(conn.resp_body)
 
       assert [%{"name" => "test_tool"}, %{"name" => "help"}] = resp["result"]["tools"]
+    end
+
+    test "action enum description reaches the wire as newline-joined summaries" do
+      session_id = initialize(tools: [MultiActionTool])
+
+      body = %{"jsonrpc" => "2.0", "id" => 3, "method" => "tools/list"}
+      conn = call_with_session(body, session_id, tools: [MultiActionTool])
+      resp = JSON.decode!(conn.resp_body)
+
+      tool = Enum.find(resp["result"]["tools"], &(&1["name"] == "multi_action"))
+
+      assert tool["inputSchema"]["properties"]["action"]["description"] ==
+               "alpha: Do alpha\nbeta: Do beta"
     end
   end
 
@@ -1419,6 +1524,38 @@ defmodule Wymcp.RouterTest do
       assert_raise ArgumentError, ~r/:description/, fn ->
         Wymcp.Router.init(tools: [MissingDescriptionTool])
       end
+    end
+
+    test "raises when an action description contains a newline" do
+      assert_raise ArgumentError, ~r/newline/, fn ->
+        Wymcp.Router.init(tools: [NewlineDescriptionTool])
+      end
+    end
+
+    test "raises when an action name contains a newline" do
+      assert_raise ArgumentError, ~r/newline/, fn ->
+        Wymcp.Router.init(tools: [NewlineActionNameTool])
+      end
+    end
+
+    test "raises when an action name is not an atom" do
+      assert_raise ArgumentError, ~r/must be an atom/, fn ->
+        Wymcp.Router.init(tools: [StringActionNameTool])
+      end
+    end
+
+    @tag doc: """
+         Pins D5's scope boundary (2026-07-29-action-description-joiner):
+         the newline check covers :description and the action name, never
+         the other consumer-authored doc fields. cai's ui tool ships :notes
+         containing "\\n\\n## Components\\n\\n" — a check hoisted into a
+         shared doc-field helper would fail that tool's next boot. A failure
+         here means the check leaked past :description.
+         """
+    test "accepts an action whose :notes contains newlines" do
+      opts = Wymcp.Router.init(tools: [MultilineNotesTool])
+
+      assert Keyword.fetch!(opts, :tools) == [MultilineNotesTool, Wymcp.Help]
     end
 
     test "raises when an action lacks :properties" do

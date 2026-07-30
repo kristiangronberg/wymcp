@@ -82,10 +82,11 @@ end
 
 ### 2b. Self-documentation: the help tool
 
-`tools/list` emits a compact schema per tool: an action enum with one-line
-descriptions, plus a bare `data` object. The LLM acts from the summaries and
-asks for detail only when it needs it, through the `help` tool that wymcp
-injects into every server (the tool name `help` is reserved for it):
+`tools/list` emits a compact schema per tool: an action enum whose
+description carries the action summaries, one per line, plus a bare
+`data` object. The LLM acts from the summaries and asks for detail only
+when it needs it, through the `help` tool that wymcp injects into every
+server (the tool name `help` is reserved for it):
 
     help {}                                     → index of every tool and its actions
     help {"tool": "tasks"}                      → that tool complete (schemas, notes, examples)
@@ -256,6 +257,33 @@ flowchart LR
     Validate --> JsonRpc
 ```
 
+## Consumer-authored text
+
+Wymcp emits consumer-authored text without altering it. Every string a
+consuming application writes for the framework to pass on — a tool's
+`description()`, an action schema's `:description`, `:notes`, `:related`,
+and `:examples`, property `"description"` values, `Wymcp.Hint` descriptions,
+and the router's `:instructions` and `:server_info` — reaches the wire
+exactly as written. The framework may add separation and structure around
+the text: it prefixes each action description with its action name to form
+the action summaries (`Wymcp.Tool.Schema.action_summaries/1`), sorts actions
+by name, places the summaries in JSON arrays, and joins them with a
+separator. It never edits the characters. (Names — tool, action,
+property — are identifiers, not prose, and sit outside this contract —
+except that an action name is half of every joined summary, so the
+newline constraint below covers it too.)
+
+One constraint follows from the separator: neither an action schema's
+`:description` nor an action name may contain a newline. The action
+enum's description in `tools/list` joins the action summaries with a
+newline, a summary is `<action>: <description>`, and an embedded newline
+in either half would make the boundary between summaries ambiguous — so
+wymcp refuses such a tool at boot (`Wymcp.Router.init/1`) and at runtime
+registration (`Wymcp.Session.register_tool/2`) instead of reshaping the
+text. No other consumer-authored field is ever joined, so newlines stay
+legal everywhere else — including the tool-level `description()` and
+`:notes`.
+
 ## Modules
 
 [`Wymcp.Router`](lib/wymcp/router.ex) is the Plug entry point. It accepts
@@ -280,8 +308,8 @@ does on successes.
 injected by the router into every server under the reserved tool name `help`.
 It answers at three levels — a server index, one tool complete, one action
 complete — reading the session's effective tool list, and shares its
-one-liner content source with the `tools/list` description builder so the two
-cannot drift.
+action-summary content source with the `tools/list` description builder so
+the two cannot drift.
 
 [`Wymcp.Context`](lib/wymcp/context.ex) is the `%Context{}` struct passed as the
 third argument to every `run_action/3` callback. It carries the session

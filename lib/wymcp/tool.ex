@@ -39,10 +39,15 @@ defmodule Wymcp.Tool do
 
   ## Action schema format
 
-  Each action in the `actions/0` map must have:
+  Each action in the `actions/0` map is keyed by the action name: an atom
+  that must not contain a newline (validated at boot and at runtime
+  registration, like `:description` below). Each action must have:
 
-  - `:description` — human-readable description (appears in the action enum's
-    one-liners and in help output)
+  - `:description` — human-readable description of the action, emitted
+    verbatim into the action summaries (the `tools/list` action enum, the
+    help index) and into help's tool and action levels. Must not contain a
+    newline — validated at boot and at runtime registration. See the README
+    section "Consumer-authored text".
   - `:properties` — JSON Schema properties for the action's `data` parameter
 
   Optional fields:
@@ -271,6 +276,7 @@ defmodule Wymcp.Tool do
 
   @spec validate_action_schema!(module(), atom(), map()) :: :ok
   defp validate_action_schema!(module, action, schema) do
+    validate_action_name!(module, action)
     validate_description!(module, action, schema)
     properties = validate_properties!(module, action, schema)
 
@@ -288,6 +294,26 @@ defmodule Wymcp.Tool do
     :ok
   end
 
+  # A joined action summary is "<action>: <description>", so the name is the
+  # other half the newline separator has to survive.
+  @spec validate_action_name!(module(), atom()) :: :ok
+  defp validate_action_name!(module, action) when is_atom(action) do
+    if String.contains?(Atom.to_string(action), "\n") do
+      raise ArgumentError,
+            "Tool #{inspect(module)} action #{inspect(action)}: " <>
+              "an action name must not contain a newline (the tools/list " <>
+              "action enum joins action summaries with a newline separator)"
+    end
+
+    :ok
+  end
+
+  defp validate_action_name!(module, action) do
+    raise ArgumentError,
+          "Tool #{inspect(module)} action #{inspect(action)}: " <>
+            "an action name must be an atom"
+  end
+
   # :description and :properties are load-bearing at request time — the
   # description is interpolated into every tools/list and both are read
   # unconditionally by the help tool — so their absence must fail here,
@@ -296,6 +322,14 @@ defmodule Wymcp.Tool do
   defp validate_description!(module, action, schema) do
     case Map.fetch(schema, :description) do
       {:ok, description} when is_binary(description) ->
+        if String.contains?(description, "\n") do
+          raise ArgumentError,
+                "Tool #{inspect(module)} action #{inspect(action)}: " <>
+                  ":description must not contain a newline (the tools/list " <>
+                  "action enum joins action summaries with a newline " <>
+                  "separator), got #{inspect(description)}"
+        end
+
         :ok
 
       {:ok, other} ->

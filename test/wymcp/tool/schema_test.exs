@@ -14,7 +14,7 @@ defmodule Wymcp.Tool.SchemaTest do
       defaults: %{"color" => "blue"}
     },
     get: %{
-      description: "Get a widget by ID",
+      description: "Get a widget by ID. Returns name and color.",
       properties: %{
         "id" => %{"type" => "integer", "minimum" => 1}
       },
@@ -55,12 +55,19 @@ defmodule Wymcp.Tool.SchemaTest do
       assert schema["properties"]["action"]["enum"] == ["create", "get", "identify", "list"]
     end
 
-    test "action description carries one one-liner per action and nothing else" do
+    test "action description carries one action summary per line and nothing else" do
       schema = Schema.build(@actions)
       description = schema["properties"]["action"]["description"]
 
       assert description ==
-               Enum.join(Schema.action_summaries(@actions), ". ")
+               "create: Create a widget\n" <>
+                 "get: Get a widget by ID. Returns name and color.\n" <>
+                 "identify: Identify by id or by (name + color)\n" <>
+                 "list: List all widgets"
+
+      # The literal above pins the content; this pins build/1 to the shared
+      # content source the help index renders from.
+      assert description == Enum.join(Schema.action_summaries(@actions), "\n")
 
       refute description =~ "help:"
       refute description =~ "describe:"
@@ -85,10 +92,10 @@ defmodule Wymcp.Tool.SchemaTest do
   end
 
   describe "action_summaries/1" do
-    test "returns one one-liner per action, sorted by action name" do
+    test "returns one action summary per action, sorted by action name" do
       assert Schema.action_summaries(@actions) == [
                "create: Create a widget",
-               "get: Get a widget by ID",
+               "get: Get a widget by ID. Returns name and color.",
                "identify: Identify by id or by (name + color)",
                "list: List all widgets"
              ]

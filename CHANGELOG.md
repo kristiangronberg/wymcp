@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1]
+
+### Changed
+
+- The action enum's description in `tools/list` now joins the action
+  summaries with a newline instead of `". "`. The old separator manufactured
+  a sentence period the consumer did not write, and stopped separating once
+  a description contained its own sentence boundary; descriptions now reach
+  the wire exactly as written. The contract is now documented in the
+  README's "Consumer-authored text" section.
+- **BREAKING:** neither an action-schema `:description` nor an action name
+  may contain a newline — a summary joins the two, so a newline in either
+  would make the separator ambiguous. `Wymcp.Router.init/1` raises at boot
+  and `Session.register_tool/2` at registration, the same way other
+  malformed action schemas fail. `:notes`, `:related`, `:examples` and the
+  tool-level `description()` are never joined and stay unrestricted.
+  Verified against both known consumers: zero action descriptions and zero
+  action names contain a newline.
+
 ## [0.8.0]
 
 ### Added

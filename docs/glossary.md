@@ -16,6 +16,9 @@ second meaning. The elicitation-response `"action"` field
 `Wymcp.Tool.Schema.action_summaries/1`
 _Avoid_: one-liner, one-line description
 
+**consumer-authored text**
+Defined at its prose home: the README section "Consumer-authored text".
+
 **help**
 The framework-owned introspection tool — the server's entire introspection
 surface; defined at its code home, `Wymcp.Help` (moduledoc).

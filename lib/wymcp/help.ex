@@ -5,7 +5,7 @@ defmodule Wymcp.Help do
   tool name `help`.
 
   Help answers at three levels: a bare call returns the server index (every
-  tool with its action one-liners); `tool` returns that tool complete (all
+  tool with its action summaries); `tool` returns that tool complete (all
   action schemas with notes, related actions, and examples); `tool` plus
   `action` returns one action complete, with the target tool's
   `c:Wymcp.Tool.action_context/2` output under `"context"`. Resolution order

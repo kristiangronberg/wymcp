@@ -97,6 +97,32 @@ defmodule Wymcp.SessionTest do
     def run_action(:run, _data, _ctx), do: {:ok, %{}}
   end
 
+  defmodule NewlineDescriptionRuntimeTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "newline_description"
+
+    @impl true
+    def description, do: "An action description contains a newline"
+
+    @impl true
+    def actions do
+      %{
+        run: %{
+          description: "First line\nsecond line",
+          properties: %{},
+          required: [],
+          defaults: %{}
+        }
+      }
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx), do: {:ok, %{}}
+  end
+
   describe "start_link/1" do
     test "starts a session and stores capabilities" do
       {:ok, pid} =
@@ -457,6 +483,16 @@ defmodule Wymcp.SessionTest do
 
       assert_raise ArgumentError, ~r/:required references field\(s\)/, fn ->
         Session.register_tool(pid, MalformedRuntimeTool)
+      end
+
+      assert Session.get_tools(pid) == []
+    end
+
+    test "raises on an action description containing a newline, same as boot validation" do
+      {:ok, pid, _id} = start_session()
+
+      assert_raise ArgumentError, ~r/newline/, fn ->
+        Session.register_tool(pid, NewlineDescriptionRuntimeTool)
       end
 
       assert Session.get_tools(pid) == []

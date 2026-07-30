@@ -79,7 +79,7 @@ defmodule Wymcp.HelpTest do
   end
 
   describe "run/2 — index" do
-    test "bare call returns every session tool with action one-liners" do
+    test "bare call returns every session tool with action summaries" do
       ctx = build_ctx([WidgetTool, Help])
 
       %{"tools" => tools} = decode(Help.run(ctx, %{}))
