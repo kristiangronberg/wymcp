@@ -32,6 +32,13 @@ The framework-owned introspection tool — the server's entire introspection
 surface; defined at its code home, `Wymcp.Help` (moduledoc).
 _Avoid_: describe, built-in action, narrowing, topic
 
+**help pointer**
+The copyable help-call suggestion carried under the `"help"` key of a
+tool-dialect error payload, telling the LLM which help call explains the
+surface it just misused. The pointer string is a legal call, never a
+prose hint; its format lives in one internal builder (`Wymcp.Tool`).
+_Avoid_: help link, help hint
+
 ## Grandfathered (pending define)
 
 Swept from the existing code and docs on 2026-07-05 (glossary bootstrap).
