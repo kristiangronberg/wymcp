@@ -53,5 +53,4 @@ POST /
 
 ## Type checking
 
-There is no Dialyzer and no `@spec` in this repository (removed in 0.8.2).
 The type gate is `compile --warnings-as-errors` in `mix precommit`.
