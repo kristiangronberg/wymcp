@@ -16,6 +16,11 @@ second meaning. The elicitation-response `"action"` field
 `Wymcp.Tool.Schema.action_summaries/1`
 _Avoid_: one-liner, one-line description
 
+**arguments**
+The params object of a `tools/call` request, carrying `action` + `data`.
+Optional on the wire: absent or JSON-null arguments read as the empty
+object.
+
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
 
@@ -39,7 +44,6 @@ end collect the synonym sets that span entries.
 - **action-dispatched pattern** — the design idiom where one tool name multiplexes many actions. (`Wymcp.Tool` moduledoc)
 - **action schema** — the per-action definition map: `:description`, `:properties`, `:required`, `:required_one_of`, `:defaults`, `:notes`, `:related`, `:examples`. (`Wymcp.Tool` `@type action_schema`)
 - **data** — the action-specific parameter sub-object inside a call's `arguments`. (`Wymcp.Tool`, `Wymcp.Tool.Schema`)
-- **arguments** — the `tools/call` params object carrying `action` + `data`. (`Wymcp.Methods.ToolsCall`)
 - **dispatch** — routing a call to its handler. **Overloaded:** action-level (`Wymcp.Tool.dispatch/4` → `run_action`), method-level (`Wymcp.Plugs.Dispatch` → `Methods.*`), and the stock `Plug.Router` `plug(:dispatch)`. (`Wymcp.Tool`, `Wymcp.Plugs.Dispatch`)
 - **required** — unconditionally required property names, AND-semantics. **Overloaded:** also the JSON Schema keyword (array) and `PromptArgument.required` (boolean) in the protocol schema. (`Wymcp.Tool`)
 - **required_one_of** — list of property groups; at least one group must be fully present (OR-of-AND), enforced at dispatch and surfaced by the help tool. (`Wymcp.Tool`, CHANGELOG 0.5.0)
