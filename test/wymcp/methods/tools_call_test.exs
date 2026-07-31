@@ -224,14 +224,41 @@ defmodule Wymcp.Methods.ToolsCallTest do
     assert body["error"]["code"] == -32602
   end
 
-  test "returns invalid_params when arguments is missing" do
-    conn =
-      build_conn("tools/call", %{"name" => "echo"}, [EchoTool])
+  @tag doc: """
+       The MCP schema requires only "name" in CallToolRequestParams, so an
+       omitted "arguments" must not be rejected at the container level —
+       it reads as the empty object. For a generated (action-dispatched)
+       tool, %{} still fails the tool's own inputSchema, but the -32602
+       now names the missing "action" instead of the container-level text.
+       """
+  test "accepts a tools/call without arguments and validates %{} against the tool schema" do
+    conn = build_conn("tools/call", %{"name" => "echo"}, [EchoTool])
 
     result = ToolsCall.run(conn, [EchoTool])
     body = JSON.decode!(result.resp_body)
 
     assert body["error"]["code"] == -32602
+    assert body["error"]["data"]["error"] =~ "property 'action' is required"
+  end
+
+  test "treats JSON-null arguments as absent" do
+    conn = build_conn("tools/call", %{"name" => "echo", "arguments" => nil}, [EchoTool])
+
+    result = ToolsCall.run(conn, [EchoTool])
+    body = JSON.decode!(result.resp_body)
+
+    assert body["error"]["code"] == -32602
+    assert body["error"]["data"]["error"] =~ "property 'action' is required"
+  end
+
+  test "returns invalid_params when arguments is not an object" do
+    conn = build_conn("tools/call", %{"name" => "echo", "arguments" => 5}, [EchoTool])
+
+    result = ToolsCall.run(conn, [EchoTool])
+    body = JSON.decode!(result.resp_body)
+
+    assert body["error"]["code"] == -32602
+    assert body["error"]["data"]["reason"] =~ "expected an object"
   end
 
   @tag doc: """

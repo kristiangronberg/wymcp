@@ -3,7 +3,7 @@ defmodule Wymcp.Plugs.Session do
   Resolves the MCP session for an incoming request and enforces the
   spec-mandated lifecycle.
 
-  Three outcomes per request:
+  Four outcomes per request:
 
     * **Session header present and registered** — assigns
       `:wymcp_session_pid` and `:wymcp_session_id`, calls `Session.touch/1`,
@@ -16,6 +16,14 @@ defmodule Wymcp.Plugs.Session do
       MCP 2025-11-25 spec: "Servers that require a session ID SHOULD
       respond to requests without an `MCP-Session-Id` header with
       HTTP 400 Bad Request."
+
+    * **Singleton header duplicated** — rejects with HTTP 400 + JSON-RPC
+      -32600 (`invalid_request`), naming the header. A request carrying
+      more than one `Mcp-Session-Id` (or `MCP-Protocol-Version`) value is
+      malformed; picking one silently would mask a broken proxy, so the
+      request fails closed. For `MCP-Protocol-Version` the duplication
+      check runs before value comparison — two values are rejected even
+      when one matches the negotiated version.
 
     * **Session header present but not registered** — rejects with
       HTTP 404. Per the MCP 2025-11-25 spec, Streamable HTTP / Session
@@ -32,9 +40,10 @@ defmodule Wymcp.Plugs.Session do
   flowchart TD
       A[Incoming POST] --> B{Mcp-Session-Id<br/>required?}
       B -->|"no — initialize / ping"| Pass([pass through<br/>to next plug])
-      B -->|yes| C{Header present?}
-      C -->|no| R400([HTTP 400<br/>JSON-RPC -32600<br/>invalid_request])
-      C -->|yes| D{Session.lookup}
+      B -->|yes| C{Header count?}
+      C -->|none| R400([HTTP 400<br/>JSON-RPC -32600<br/>invalid_request])
+      C -->|"more than one"| R400
+      C -->|"exactly one"| D{Session.lookup}
       D -->|"{:ok, pid}"| E[assign pid<br/>+ touch<br/>+ check version<br/>+ lifecycle gate] --> Pass
       D -->|":not_found"| F{Message kind?}
       F -->|"request<br/>(has id)"| R404Body([HTTP 404<br/>JSON-RPC -32001<br/>'Session terminated'<br/>no data field])
@@ -147,6 +156,9 @@ defmodule Wymcp.Plugs.Session do
 
       [] ->
         missing_session_header(conn)
+
+      [_, _ | _] ->
+        duplicated_header(conn, "Mcp-Session-Id")
     end
   end
 
@@ -171,6 +183,9 @@ defmodule Wymcp.Plugs.Session do
 
       [] ->
         missing_session_header(conn)
+
+      [_, _ | _] ->
+        duplicated_header(conn, "Mcp-Session-Id")
     end
   end
 
@@ -191,6 +206,20 @@ defmodule Wymcp.Plugs.Session do
   defp missing_session_header(conn) do
     request_id = conn.body_params["id"]
     data = %{error: "Missing Mcp-Session-Id header. Initialize first."}
+    response = JsonRpc.error_response(:invalid_request, request_id, data)
+
+    conn
+    |> put_status(400)
+    |> send_json(response)
+  end
+
+  defp duplicated_header(conn, header_name) do
+    request_id = conn.body_params["id"]
+
+    data = %{
+      error: "Duplicated #{header_name} header. Send exactly one #{header_name} header."
+    }
+
     response = JsonRpc.error_response(:invalid_request, request_id, data)
 
     conn
@@ -256,6 +285,9 @@ defmodule Wymcp.Plugs.Session do
         # Header absent — allow through. Major clients (Claude Desktop)
         # don't send MCP-Protocol-Version yet.
         conn
+
+      [_, _ | _] ->
+        duplicated_header(conn, "MCP-Protocol-Version")
 
       [_wrong] ->
         protocol_version_mismatch(conn)

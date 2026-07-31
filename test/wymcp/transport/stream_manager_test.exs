@@ -16,75 +16,194 @@ defmodule Wymcp.Transport.StreamManagerTest do
   the process-global session Registry, and this module runs
   `async: true`.
 
-  The StreamManager is started with a session pid and registers itself
-  with the session. It monitors the session — if the session dies, the
-  stream shuts down. The keepalive timer fires periodically but is
-  tested with short intervals to avoid slow tests.
+  The StreamManager is started conn-lessly with a session pid (it registers
+  with the session in init/1) and receives the chunked conn afterwards via
+  attach/2, which sends the priming event and starts keepalives — mirroring
+  the router's two-phase GET flow. It monitors the session: if the session
+  dies, the stream shuts down. The keepalive timer fires periodically but
+  is tested with short intervals to avoid slow tests.
 
   Real SSE output is covered by integration tests using an HTTP client
   against a running server (out of scope for this unit test module).
   """
 
   import Plug.Test
+  import ExUnit.CaptureLog
 
   alias Wymcp.Session
   alias Wymcp.Transport.SSE
   alias Wymcp.Transport.Stream
   alias Wymcp.Transport.StreamManager
 
+  defmodule RefusingSession do
+    @moduledoc false
+    use GenServer
+
+    @impl GenServer
+    def init(nil), do: {:ok, nil}
+
+    @impl GenServer
+    def handle_call({:register_stream, _pid}, _from, state), do: {:stop, :boom, state}
+  end
+
   describe "start_link/1" do
     @tag doc: """
          StreamManager requires a session_pid in its opts and refuses to
-         start without one, before any conn is touched. A failure here
-         means the GenServer init/1 is not validating required opts.
+         start without one, before anything else happens. A failure here
+         means start_link/1 lost its nil guard.
          """
     test "requires :session_pid in opts" do
-      assert {:error, _} = StreamManager.start_link(%{conn: nil, session_pid: nil})
+      assert {:error, _} = StreamManager.start_link(%{session_pid: nil})
     end
 
     @tag doc: """
-         Control for the regression test below. A failure here means the
-         test harness itself broke (session, chunked conn, or priming),
-         not the parser.
+         Phase one of the two-phase start: registration happens in init/1,
+         before the router commits the 200. A session dying between the
+         router's lookup and registration must surface as :ignore — not a
+         non-:normal init exit, which kills the linked GET request process
+         before start_link returns (probed on OTP 28) — so the router can
+         answer a clean pre-commit 404.
          """
-    test "resumes the event counter from a well-formed last_event_id" do
+    test "returns :ignore when the session is already dead" do
       session_pid = start_session()
-      chunked_conn = Stream.open(conn(:get, "/"))
+      :ok = GenServer.stop(session_pid)
+
+      assert :ignore = StreamManager.start_link(%{session_pid: session_pid})
+    end
+
+    @tag doc: """
+         A registration failure that does not mean "session gone" — a call
+         timeout from a saturated session mailbox, a session crash — still
+         answers :ignore, because a non-:normal init exit would kill the
+         linked GET request process. It must not be silent, though: the
+         client sees the same "Session not found" 404 either way, so
+         without this line an operator cannot tell an expired session from
+         a server too busy to register the stream. The stub is started
+         with GenServer.start/2, not start_link/2, so its abnormal exit
+         does not reach the test process.
+         """
+    test "logs a registration failure whose reason is not a dead session" do
+      {:ok, session_pid} = GenServer.start(RefusingSession, nil)
+
+      log =
+        capture_log(fn ->
+          assert :ignore = StreamManager.start_link(%{session_pid: session_pid})
+        end)
+
+      assert log =~ "SSE stream registration failed"
+      assert log =~ ":boom"
+    end
+  end
+
+  describe "attach/2" do
+    @tag doc: """
+         Control for the tests below. A failure here means the test
+         harness itself broke (session, start_link, chunked conn, or
+         attach) — not the resumption parser.
+         """
+    test "sends the priming event and resumes the counter from a well-formed last_event_id" do
+      session_pid = start_session()
 
       assert {:ok, stream_pid} =
                StreamManager.start_link(%{
-                 conn: chunked_conn,
                  session_pid: session_pid,
                  keepalive_interval: 60_000,
                  last_event_id: "evt-7"
                })
 
+      chunked_conn = Stream.open(conn(:get, "/"))
+      assert :ok = StreamManager.attach(stream_pid, chunked_conn)
+
       assert :sys.get_state(stream_pid).event_counter == 8
-      :ok = StreamManager.shutdown(stream_pid)
+      :ok = GenServer.stop(stream_pid)
     end
 
     @tag doc: """
          Guards the regression where Last-Event-ID went from the client's
-         header straight into String.to_integer/1: a suffix that is not a
-         number raised ArgumentError inside init/1 and killed the linked
-         caller — the connection process running the router's GET route —
-         so the router's 500 branch never ran. A failure here means the
-         resume counter is parsing wire text type-assumingly again.
+         header straight into String.to_integer/1 and crashed the stream
+         during startup. The header is raw client input: a malformed id
+         resumes from 0 — and (B8) the discard is logged as a warning
+         naming the raw value, because the operator's problem is a proxy
+         mangling the header being invisible at info level.
          """
-    test "starts with a malformed last_event_id and resumes from 0" do
+    test "attaches with a malformed last_event_id, resumes from 0, and warns" do
       session_pid = start_session()
-      chunked_conn = Stream.open(conn(:get, "/"))
 
       assert {:ok, stream_pid} =
                StreamManager.start_link(%{
-                 conn: chunked_conn,
                  session_pid: session_pid,
                  keepalive_interval: 60_000,
                  last_event_id: "evt-x"
                })
 
+      chunked_conn = Stream.open(conn(:get, "/"))
+
+      log =
+        capture_log(fn ->
+          assert :ok = StreamManager.attach(stream_pid, chunked_conn)
+        end)
+
+      assert log =~ "SSE resumption point discarded"
+      assert log =~ "evt-x"
       assert :sys.get_state(stream_pid).event_counter == 1
-      :ok = StreamManager.shutdown(stream_pid)
+      :ok = GenServer.stop(stream_pid)
+    end
+
+    @tag doc: """
+         evt-0 is a legitimate resumption point, not a discard: detection
+         keys on parse failure, never on counter == 0. Same counter
+         outcome as a discard, different operator signal.
+         """
+    test "evt-0 keeps the info reconnected line, not the discard warning" do
+      session_pid = start_session()
+
+      assert {:ok, stream_pid} =
+               StreamManager.start_link(%{
+                 session_pid: session_pid,
+                 keepalive_interval: 60_000,
+                 last_event_id: "evt-0"
+               })
+
+      chunked_conn = Stream.open(conn(:get, "/"))
+
+      log =
+        capture_log(fn ->
+          assert :ok = StreamManager.attach(stream_pid, chunked_conn)
+        end)
+
+      assert log =~ "SSE stream reconnected"
+      refute log =~ "discarded"
+      assert :sys.get_state(stream_pid).event_counter == 1
+      :ok = GenServer.stop(stream_pid)
+    end
+
+    test "push before attach answers {:error, :no_stream}" do
+      session_pid = start_session()
+
+      assert {:ok, stream_pid} = StreamManager.start_link(%{session_pid: session_pid})
+
+      assert {:error, :no_stream} = StreamManager.push(stream_pid, %{"jsonrpc" => "2.0"})
+      :ok = GenServer.stop(stream_pid)
+    end
+
+    @tag doc: """
+         attach/2 must not crash its caller — the router's GET request
+         process, which has already committed the 200 — when the manager
+         died in the gap after start_link/1. Stopping the manager directly
+         is the deterministic stand-in for that race. The catch is
+         deliberately `:exit, _reason` rather than a narrowed reason
+         pattern: the manager's gap-death shape varies with why the
+         session went away, and none of them may escape to the caller.
+         """
+    test "attach on a dead manager answers {:error, :gone}" do
+      session_pid = start_session()
+
+      assert {:ok, stream_pid} = StreamManager.start_link(%{session_pid: session_pid})
+      :ok = GenServer.stop(stream_pid)
+
+      chunked_conn = Stream.open(conn(:get, "/"))
+
+      assert {:error, :gone} = StreamManager.attach(stream_pid, chunked_conn)
     end
   end
 
@@ -92,30 +211,43 @@ defmodule Wymcp.Transport.StreamManagerTest do
     @tag doc: """
          When the session process dies, the StreamManager must terminate.
          This prevents orphaned streams from holding connections open
-         after the session has been cleaned up. We use a fake session
-         process to test the monitoring path without needing a real Session.
+         after the session has been cleaned up.
          """
     test "terminates when session process dies" do
-      # Spawn a fake session that we can kill
-      fake_session = spawn(fn -> Process.sleep(:infinity) end)
+      session_pid = start_session()
+      {:ok, stream_pid} = StreamManager.start_link(%{session_pid: session_pid})
+      ref = Process.monitor(stream_pid)
 
-      # We need a process that acts like StreamManager's monitoring behavior
-      # but doesn't need a real conn. Test the monitoring logic directly.
-      test_pid = self()
+      :ok = GenServer.stop(session_pid)
 
-      watcher =
-        spawn(fn ->
-          ref = Process.monitor(fake_session)
+      assert_receive {:DOWN, ^ref, :process, ^stream_pid, :normal}, 1000
+    end
+  end
 
-          receive do
-            {:DOWN, ^ref, :process, _pid, _reason} ->
-              send(test_pid, :stream_terminated)
-          end
-        end)
+  describe "stream replacement" do
+    @tag doc: """
+         The session stops a replaced manager by asking it to stop — a
+         :replaced cast the manager answers with {:stop, :normal, state}.
+         The reason is load-bearing: the manager is linked to the GET
+         request process that started it, and :normal is the one exit
+         reason that link does not carry fatally, so the replaced request
+         can still finish its response. A failure here means the clause is
+         missing and `use GenServer`'s default cast handler answered
+         instead, stopping with {:bad_cast, :replaced}.
+         """
+    test "a :replaced cast stops the manager with reason :normal" do
+      session_pid = start_session()
 
-      Process.exit(fake_session, :kill)
-      assert_receive :stream_terminated, 1000
-      refute Process.alive?(watcher)
+      assert {:ok, stream_pid} =
+               StreamManager.start_link(%{
+                 session_pid: session_pid,
+                 keepalive_interval: 60_000
+               })
+
+      ref = Process.monitor(stream_pid)
+      GenServer.cast(stream_pid, :replaced)
+
+      assert_receive {:DOWN, ^ref, :process, ^stream_pid, :normal}, 1000
     end
   end
 

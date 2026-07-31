@@ -62,6 +62,24 @@ defmodule Wymcp.Telemetry do
     - Metadata: `%{auth_module: module(), exception: String.t(),
       error: String.t(), request_id: term(),
       method: String.t() | nil}`
+
+  * `[:wymcp, :server, :reject]` — the consumer's `c:Wymcp.Server.init/2`
+    returned `{:error, reason}`; the session is terminated and the
+    `notifications/initialized` request answered with a JSON-RPC
+    internal_error
+    - Measurements: `%{system_time: integer()}`
+    - Metadata: `%{server: module(), session_id: String.t(),
+      reason: term(), request_id: term() | nil}` — `reason` is the raw
+      term the callback returned
+
+  * `[:wymcp, :server, :error]` — the consumer's `c:Wymcp.Server.init/2`
+    raised, exited, or threw; treated as a rejection (same session
+    termination and internal_error answer)
+    - Measurements: `%{system_time: integer()}`
+    - Metadata: `%{server: module(), session_id: String.t(),
+      exception: String.t(), error: String.t(), request_id: term() | nil}`
+      — `exception` is the exception struct name for a raise, or
+      `"exit"` / `"throw"` for the other kinds
   """
 
   def emit(component, event, measurements \\ %{}, metadata \\ %{}) do

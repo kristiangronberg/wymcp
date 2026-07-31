@@ -732,20 +732,43 @@ defmodule Wymcp.IntegrationTest do
       [session_id] = get_resp_header(init_conn, "mcp-session-id")
       headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
 
-      notif_conn =
-        post_request(
-          router_opts,
-          %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
-          headers
-        )
+      ref = make_ref()
+      handler_id = "server-raise-#{inspect(ref)}"
 
-      assert notif_conn.status == 200
-      body = JSON.decode!(notif_conn.resp_body)
-      assert body["error"]["code"] == -32603
-      assert body["error"]["data"]["reason"] =~ "reserved name"
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :server, :error],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
 
-      Process.sleep(10)
-      assert {:error, :not_found} = Session.lookup(session_id)
+      try do
+        notif_conn =
+          post_request(
+            router_opts,
+            %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+            headers
+          )
+
+        assert notif_conn.status == 200
+        body = JSON.decode!(notif_conn.resp_body)
+        assert body["error"]["code"] == -32603
+        assert body["error"]["data"]["reason"] =~ "reserved name"
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.server == ReservedNameRegisteringServer
+        assert metadata.session_id == session_id
+        assert metadata.exception == "ArgumentError"
+        assert metadata.error =~ "reserved name"
+        assert metadata.request_id == 2
+
+        Process.sleep(10)
+        assert {:error, :not_found} = Session.lookup(session_id)
+      after
+        :telemetry.detach(handler_id)
+      end
     end
 
     @tag doc: """
@@ -760,20 +783,43 @@ defmodule Wymcp.IntegrationTest do
 
       {session_id, headers} = initialize_session(router_opts, "exiting-server")
 
-      notif_conn =
-        post_request(
-          router_opts,
-          %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
-          headers
-        )
+      ref = make_ref()
+      handler_id = "server-error-#{inspect(ref)}"
 
-      assert notif_conn.status == 200
-      body = JSON.decode!(notif_conn.resp_body)
-      assert body["error"]["code"] == -32603
-      assert body["error"]["data"]["reason"] =~ "timeout"
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :server, :error],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
 
-      Process.sleep(10)
-      assert {:error, :not_found} = Session.lookup(session_id)
+      try do
+        notif_conn =
+          post_request(
+            router_opts,
+            %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+            headers
+          )
+
+        assert notif_conn.status == 200
+        body = JSON.decode!(notif_conn.resp_body)
+        assert body["error"]["code"] == -32603
+        assert body["error"]["data"]["reason"] =~ "timeout"
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.server == ExitingServer
+        assert metadata.session_id == session_id
+        assert metadata.exception == "exit"
+        assert metadata.error =~ "timeout"
+        assert metadata.request_id == 2
+
+        Process.sleep(10)
+        assert {:error, :not_found} = Session.lookup(session_id)
+      after
+        :telemetry.detach(handler_id)
+      end
     end
 
     @tag doc: """
@@ -788,20 +834,72 @@ defmodule Wymcp.IntegrationTest do
 
       {session_id, headers} = initialize_session(router_opts, "tuple-reason")
 
-      notif_conn =
+      ref = make_ref()
+      handler_id = "server-reject-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :server, :reject],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        notif_conn =
+          post_request(
+            router_opts,
+            %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+            headers
+          )
+
+        assert notif_conn.status == 200
+        body = JSON.decode!(notif_conn.resp_body)
+        assert body["error"]["code"] == -32603
+        assert body["error"]["data"]["reason"] =~ "forbidden"
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.server == TupleReasonServer
+        assert metadata.session_id == session_id
+        assert metadata.reason == {:forbidden, 42}
+        assert metadata.request_id == 2
+
+        Process.sleep(10)
+        assert {:error, :not_found} = Session.lookup(session_id)
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+  end
+
+  describe "tools/call without arguments (end-to-end)" do
+    @tag doc: """
+         Pins the whole-pipeline claim behind the A1 change: the envelope
+         schema (CallToolRequestParams requires only "name") passes a
+         tools/call with no "arguments" through Plugs.Validate, and the
+         handler defaults it to the empty object. help is the one tool
+         whose input schema accepts %{}, so the bare call answers the
+         introspection index.
+         """
+    test "a bare help call answers the help index" do
+      {_session_id, headers} = initialize_session(@router_opts, "bare-help-call")
+
+      conn =
         post_request(
-          router_opts,
-          %{"jsonrpc" => "2.0", "id" => 2, "method" => "notifications/initialized"},
+          %{
+            "jsonrpc" => "2.0",
+            "id" => 2,
+            "method" => "tools/call",
+            "params" => %{"name" => "help"}
+          },
           headers
         )
 
-      assert notif_conn.status == 200
-      body = JSON.decode!(notif_conn.resp_body)
-      assert body["error"]["code"] == -32603
-      assert body["error"]["data"]["reason"] =~ "forbidden"
-
-      Process.sleep(10)
-      assert {:error, :not_found} = Session.lookup(session_id)
+      assert conn.status == 200
+      body = JSON.decode!(conn.resp_body)
+      assert body["result"]["isError"] == false
+      assert [%{"type" => "text"} | _] = body["result"]["content"]
     end
   end
 

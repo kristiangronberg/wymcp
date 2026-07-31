@@ -64,6 +64,28 @@ defmodule Wymcp.Plugs.OriginCheckTest do
       assert body["error"]["code"] == -32600
     end
 
+    @tag doc: """
+         get_req_header/2 returns every value of a repeated header — the old
+         two-clause case head crashed with CaseClauseError (a 500) on a
+         duplicated Origin. Duplication is malformed even when every value
+         is allowlisted: first-value-wins would mask a broken proxy and
+         invite smuggling-style ambiguity.
+         """
+    test "rejects requests with a duplicated Origin header with 400" do
+      conn =
+        conn(:post, "/")
+        |> assign(:wymcp, origin: ["http://localhost:4000"])
+        |> put_req_header("origin", "http://localhost:4000")
+        |> prepend_req_headers([{"origin", "http://localhost:4000"}])
+        |> OriginCheck.call(@opts)
+
+      assert conn.halted
+      assert conn.status == 400
+      body = JSON.decode!(conn.resp_body)
+      assert body["error"]["code"] == -32600
+      assert body["error"]["data"]["error"] =~ "Duplicated Origin"
+    end
+
     test "supports multiple origins in allowlist" do
       conn =
         conn(:post, "/")

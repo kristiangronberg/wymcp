@@ -32,6 +32,9 @@ defmodule Wymcp.Plugs.OriginCheck do
         else
           reject_origin(conn, origin)
         end
+
+      [_, _ | _] ->
+        duplicated_origin(conn)
     end
   end
 
@@ -41,6 +44,17 @@ defmodule Wymcp.Plugs.OriginCheck do
 
     conn
     |> put_status(403)
+    |> send_json(response)
+  end
+
+  # Runs before parse_body in the pipeline, so no request id is available —
+  # same as reject_origin/2.
+  defp duplicated_origin(conn) do
+    data = %{error: "Duplicated Origin header. Send exactly one Origin header."}
+    response = JsonRpc.error_response(:invalid_request, nil, data)
+
+    conn
+    |> put_status(400)
     |> send_json(response)
   end
 end

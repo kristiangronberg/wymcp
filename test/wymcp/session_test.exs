@@ -19,6 +19,7 @@ defmodule Wymcp.SessionTest do
   """
 
   alias Wymcp.Session
+  alias Wymcp.Transport.StreamManager
 
   defmodule TerminateTracker do
     @moduledoc false
@@ -561,6 +562,69 @@ defmodule Wymcp.SessionTest do
     end
 
     @tag doc: """
+         One active stream per session: registering a new stream pid must
+         stop the previous manager, or a reconnecting client leaves a
+         zombie stream consuming keepalives until its next write fails.
+         The stop is an asynchronous :replaced cast, never
+         Process.exit(old, :kill): a StreamManager is linked to the GET
+         request process that started it, and a :killed exit propagates
+         across that link and tears the request process down before it can
+         finish its response. The stand-in is spawn_link'd for exactly
+         that reason — this test process stands in for the request
+         process, so a regression to :kill surfaces here as the test
+         process itself exiting :killed rather than as a failed assertion.
+         """
+    test "register_stream/2 with a new pid stops the previously registered stream" do
+      {:ok, pid, _id} = start_session()
+      old_stream = spawn_linked_stream(self())
+      new_stream = spawn_linked_stream(self())
+      ref = Process.monitor(old_stream)
+
+      Session.register_stream(pid, old_stream)
+      assert :ok = Session.register_stream(pid, new_stream)
+
+      assert_receive {:replaced_cast, ^old_stream}, 1000
+      assert_receive {:DOWN, ^ref, :process, ^old_stream, :normal}, 1000
+      assert Session.get_state(pid).stream_pid == new_stream
+    end
+
+    test "register_stream/2 with the already-registered pid does not stop it" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn_linked_stream(self())
+
+      Session.register_stream(pid, stream_pid)
+      assert :ok = Session.register_stream(pid, stream_pid)
+
+      refute_receive {:replaced_cast, ^stream_pid}, 50
+      assert Process.alive?(stream_pid)
+      assert Session.get_state(pid).stream_pid == stream_pid
+    end
+
+    @tag doc: """
+         A dead pid can arrive here: the registering manager's own
+         register_stream call timed out (a session mailbox running behind),
+         start_link answered :ignore, and the manager exited — but a
+         timed-out GenServer.call leaves its request in the target's
+         mailbox, so the session still dequeues it later. Acting on that
+         poison message would stop the healthy current stream and leave
+         stream_pid nil; it must leave the registration untouched.
+         """
+    test "register_stream/2 with a dead pid does not replace the current stream" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn_linked_stream(self())
+      Session.register_stream(pid, stream_pid)
+
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, :normal}
+
+      assert :ok = Session.register_stream(pid, dead_pid)
+
+      refute_receive {:replaced_cast, ^stream_pid}, 50
+      assert Session.get_state(pid).stream_pid == stream_pid
+    end
+
+    @tag doc: """
          When the stream process crashes, the session must automatically
          clear :stream_pid via the monitor's :DOWN message. A failure here
          means the session is not monitoring the stream, which would leave
@@ -688,6 +752,29 @@ defmodule Wymcp.SessionTest do
     end
 
     @tag doc: """
+         The register→attach window: a real StreamManager registers with the
+         session in init/1 but holds no conn until attach/2, so its push
+         answers {:error, :no_stream}. await_client_response must forward
+         that immediately, the way push_event/2 does. A failure here shows
+         up as {:error, :timeout} after the full timeout instead — the
+         request was never delivered and the caller was never told, which
+         is what discarding the push result costs.
+         """
+    test "returns {:error, :no_stream} when the stream is registered but not attached" do
+      {:ok, pid, _id} = start_ready_session()
+
+      assert {:ok, stream_pid} = StreamManager.start_link(%{session_pid: pid})
+      assert Session.get_state(pid).stream_pid == stream_pid
+
+      request_id = "srv-preattach"
+      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
+
+      assert {:error, :no_stream} = Session.await_client_response(pid, request_id, message, 200)
+
+      :ok = GenServer.stop(stream_pid)
+    end
+
+    @tag doc: """
          A response for an unknown request_id (e.g. the request timed out
          and was already cleaned up) must be silently ignored, not crash
          the session.
@@ -810,6 +897,20 @@ defmodule Wymcp.SessionTest do
     # Register with the session
     Session.register_stream(session_pid, stream_pid)
     stream_pid
+  end
+
+  # Stands in for a StreamManager the way the router really starts one: linked
+  # to the process that started it (spawn_link here, StreamManager.start_link/1
+  # there), so a replacement that kills instead of asking takes this test
+  # process down with it. Forwards the session's :replaced cast instead of
+  # handling it, then returns — exiting :normal, the same reason
+  # StreamManager's own clause uses.
+  defp spawn_linked_stream(test_pid) do
+    spawn_link(fn ->
+      receive do
+        {:"$gen_cast", :replaced} -> send(test_pid, {:replaced_cast, self()})
+      end
+    end)
   end
 
   defp receive_loop(test_pid) do

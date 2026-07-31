@@ -21,6 +21,9 @@ The params object of a `tools/call` request, carrying `action` + `data`.
 Optional on the wire: absent or JSON-null arguments read as the empty
 object.
 
+**attach**
+`Wymcp.Transport.StreamManager.attach/2`
+
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
 

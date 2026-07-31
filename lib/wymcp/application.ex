@@ -6,8 +6,7 @@ defmodule Wymcp.Application do
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: Wymcp.Session.Registry},
-      Wymcp.Session.Supervisor,
-      {Task.Supervisor, name: Wymcp.StreamSupervisor}
+      Wymcp.Session.Supervisor
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Wymcp.Supervisor)

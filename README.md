@@ -377,12 +377,15 @@ previously-set HTTP status code and halts the connection so downstream plugs do
 not execute after a response is sent.
 
 [`Wymcp.Transport.StreamManager`](lib/wymcp/transport/stream_manager.ex) is the
-GenServer that owns the chunked SSE connection for a single MCP session. It runs
-under `Wymcp.StreamSupervisor` (a `Task.Supervisor`), sends keepalive comments
-on a configurable timer to prevent proxy timeouts, and pushes server-initiated
-SSE events when the Session calls `push_event/2`. The StreamManager and Session
-monitor each other — if either crashes, the other cleans up. Only one active SSE
-stream per session is supported; a new GET replaces the previous stream.
+GenServer that owns the chunked SSE connection for a single MCP session. It is
+started (linked) by the GET request process in two phases: registration with
+the session happens before the 200 commits — so a session that died in the
+window gets a clean 404 — and the router then hands over the chunked conn via
+`attach/2`, which sends the priming event and starts the keepalive timer that
+prevents proxy idle-disconnects. It pushes server-initiated SSE events when
+the Session calls `push_event/2`. The StreamManager and Session monitor each
+other — if either dies, the other cleans up — and registering a new stream
+stops the previous one: only one active SSE stream per session.
 
 [`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) opens and manages the
 SSE response on a Plug connection. Wraps `Plug.Conn.send_chunked/2` with the

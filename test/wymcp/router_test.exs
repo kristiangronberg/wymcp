@@ -500,6 +500,30 @@ defmodule Wymcp.RouterTest do
     def run_action(_action, _data, _ctx), do: {:ok, %{}}
   end
 
+  defmodule VanishingSession do
+    @moduledoc false
+    use GenServer
+
+    # Alive at Session.lookup/1, gone by the time StreamManager's init/1
+    # registers — the B6/B7 race, made deterministic. Answers the router's
+    # touch cast, then refuses the register_stream call by stopping without
+    # replying, which exits the caller; StreamManager turns that into :ignore.
+    def start(session_id) do
+      GenServer.start(__MODULE__, nil,
+        name: {:via, Registry, {Wymcp.Session.Registry, session_id}}
+      )
+    end
+
+    @impl GenServer
+    def init(nil), do: {:ok, nil}
+
+    @impl GenServer
+    def handle_cast(:touch, state), do: {:noreply, state}
+
+    @impl GenServer
+    def handle_call({:register_stream, _pid}, _from, state), do: {:stop, :normal, state}
+  end
+
   defp call_router(body, opts \\ []) do
     router_opts = Keyword.merge([tools: [TestTool]], opts)
     init_opts = Wymcp.Router.init(router_opts)
@@ -954,6 +978,52 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
+         The payoff of the two-phase start: a session that dies between the
+         router's lookup and the stream's registration answers the same 404
+         as an unknown session, before any bytes are committed. The stand-in
+         is started with GenServer.start/3, not start_link/3, so its exit
+         does not reach the test process, and it is asserted alive at lookup
+         time — a stand-in that died earlier would let Registry cleanup win,
+         routing the request through the already-tested lookup-miss branch
+         and passing for the wrong reason.
+         """
+    test "returns 404 when the session dies between lookup and stream registration" do
+      session_id = "vanishing-#{System.unique_integer([:positive])}"
+      {:ok, session_pid} = VanishingSession.start(session_id)
+      assert {:ok, ^session_pid} = Wymcp.Session.lookup(session_id)
+
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:get, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 404
+      assert JSON.decode!(conn.resp_body) == %{"error" => "Session not found"}
+    end
+
+    @tag doc: """
+         get_req_header/2 returns every value of a repeated header — the old
+         single-element case head crashed with CaseClauseError (a 500) on a
+         duplicated Mcp-Session-Id. The GET/DELETE routes answer in their
+         plain-JSON register, not JSON-RPC: no JSON-RPC request exists on
+         these verbs.
+         """
+    test "returns 400 when the mcp-session-id header is duplicated" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:get, "/")
+        |> put_req_header("mcp-session-id", "a")
+        |> prepend_req_headers([{"mcp-session-id", "b"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["error"] =~ "Duplicated Mcp-Session-Id"
+    end
+
+    @tag doc: """
          GET with a valid session must open an SSE stream — the response
          should have status 200, content-type text/event-stream, and be in
          chunked state. Since Plug.Test doesn't support real chunked
@@ -993,6 +1063,46 @@ defmodule Wymcp.RouterTest do
       assert content_type =~ "text/event-stream"
 
       Task.await(task, 1000)
+    end
+
+    @tag doc: """
+         Two GETs on one session: the second replaces the first. Each
+         StreamManager is linked to its own request process (the GET route
+         start_links it), so the replaced request must survive the
+         replacement and finish its committed 200 — the session stops the
+         old manager with :normal precisely so that link does not kill it.
+         A regression to Process.exit(old, :kill) surfaces here as the
+         first task exiting :killed, not as a failed assertion; before
+         replacement existed at all the first task hung and Task.await/2
+         timed out instead.
+         """
+    test "a second GET replaces the first stream and the replaced request finishes" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      sse_request = fn ->
+        Task.async(fn ->
+          conn(:get, "/")
+          |> put_req_header("mcp-session-id", session_id)
+          |> Wymcp.Router.call(opts)
+        end)
+      end
+
+      first = sse_request.()
+
+      # Let the first stream register before the second replaces it.
+      Process.sleep(100)
+
+      second = sse_request.()
+
+      first_conn = Task.await(first, 2000)
+      assert first_conn.status == 200
+      assert first_conn.state == :chunked
+
+      # Unblock the surviving stream the way the sibling test does.
+      Wymcp.Session.terminate_session(session_id)
+      second_conn = Task.await(second, 2000)
+      assert second_conn.status == 200
     end
   end
 
@@ -1240,6 +1350,35 @@ defmodule Wymcp.RouterTest do
         |> Wymcp.Router.call(opts)
 
       assert conn.status == 404
+    end
+
+    @tag doc: """
+         Spec: servers SHOULD answer requests without an Mcp-Session-Id
+         header with HTTP 400 — DELETE previously answered 404, colliding
+         with the unknown-session signal that tells a client to
+         re-initialize. Missing header = malformed request (400); unknown
+         session = re-initialize (404).
+         """
+    test "returns 400 when no mcp-session-id header" do
+      opts = Wymcp.Router.init(tools: [])
+
+      conn = conn(:delete, "/") |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["error"] =~ "Missing mcp-session-id header"
+    end
+
+    test "returns 400 when the mcp-session-id header is duplicated" do
+      opts = Wymcp.Router.init(tools: [])
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("mcp-session-id", "a")
+        |> prepend_req_headers([{"mcp-session-id", "b"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["error"] =~ "Duplicated Mcp-Session-Id"
     end
   end
 

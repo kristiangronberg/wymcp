@@ -201,50 +201,15 @@ defmodule Wymcp.Router do
     case get_req_header(conn, "mcp-session-id") do
       [session_id] ->
         case Session.lookup(session_id) do
-          {:ok, session_pid} ->
-            Session.touch(session_pid)
-            last_event_id = List.first(get_req_header(conn, "last-event-id"))
-
-            # Open SSE stream here so the router holds the chunked conn
-            chunked_conn = Wymcp.Transport.Stream.open(conn)
-
-            opts = %{
-              conn: chunked_conn,
-              session_pid: session_pid,
-              last_event_id: last_event_id
-            }
-
-            case StreamManager.start_link(opts) do
-              {:ok, stream_pid} ->
-                ref = Process.monitor(stream_pid)
-
-                receive do
-                  {:DOWN, ^ref, :process, ^stream_pid, _reason} -> :ok
-                end
-
-                chunked_conn
-
-              {:error, reason} ->
-                Logger.warning("Failed to start SSE stream: #{inspect(reason)}")
-
-                conn
-                |> put_resp_content_type("application/json")
-                |> send_resp(500, JSON.encode!(%{error: "Failed to open stream"}))
-                |> halt()
-            end
-
-          {:error, :not_found} ->
-            conn
-            |> put_resp_content_type("application/json")
-            |> send_resp(404, JSON.encode!(%{error: "Session not found"}))
-            |> halt()
+          {:ok, session_pid} -> open_stream(conn, session_pid)
+          {:error, :not_found} -> session_not_found(conn)
         end
 
       [] ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(400, JSON.encode!(%{error: "Missing mcp-session-id header"}))
-        |> halt()
+        missing_session_header(conn)
+
+      [_, _ | _] ->
+        duplicated_session_header(conn)
     end
   end
 
@@ -252,16 +217,81 @@ defmodule Wymcp.Router do
     case get_req_header(conn, "mcp-session-id") do
       [session_id] ->
         case Session.terminate_session(session_id) do
-          :ok ->
-            send_resp(conn, 200, "") |> halt()
-
-          {:error, :not_found} ->
-            send_resp(conn, 404, JSON.encode!(%{error: "Session not found"})) |> halt()
+          :ok -> send_resp(conn, 200, "") |> halt()
+          {:error, :not_found} -> session_not_found(conn)
         end
 
       [] ->
-        send_resp(conn, 404, JSON.encode!(%{error: "Missing session ID"})) |> halt()
+        missing_session_header(conn)
+
+      [_, _ | _] ->
+        duplicated_session_header(conn)
     end
+  end
+
+  defp missing_session_header(conn) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(400, JSON.encode!(%{error: "Missing mcp-session-id header"}))
+    |> halt()
+  end
+
+  defp duplicated_session_header(conn) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(
+      400,
+      JSON.encode!(%{
+        error: "Duplicated Mcp-Session-Id header. Send exactly one Mcp-Session-Id header."
+      })
+    )
+    |> halt()
+  end
+
+  defp open_stream(conn, session_pid) do
+    Session.touch(session_pid)
+    last_event_id = List.first(get_req_header(conn, "last-event-id"))
+
+    case StreamManager.start_link(%{session_pid: session_pid, last_event_id: last_event_id}) do
+      {:ok, manager} ->
+        stream_response(conn, manager)
+
+      :ignore ->
+        # The session died between lookup and registration — the same
+        # condition as a lookup miss, answered one step ahead of the
+        # 200 commit.
+        session_not_found(conn)
+    end
+  end
+
+  # The 200 commits here; a manager dying in the attach gap is the
+  # accepted residue (truncated stream, client re-initializes on
+  # reconnect), so attach's {:error, :gone} is deliberately ignored and
+  # the monitor-wait returns immediately. The monitor, not the link, is
+  # what ends this wait: every handled StreamManager stop is :normal —
+  # session DOWN, push failure, keepalive failure, and replacement alike —
+  # so the link created by start_link/1 carries no fatal signal on those
+  # paths. A raise inside the manager (JSON.encode! on an unencodable
+  # consumer-supplied term in the push path) still exits non-:normal and
+  # reaches this process through the link — a pre-existing residue this
+  # restructure does not close.
+  defp stream_response(conn, manager) do
+    ref = Process.monitor(manager)
+    chunked_conn = Wymcp.Transport.Stream.open(conn)
+    _ = StreamManager.attach(manager, chunked_conn)
+
+    receive do
+      {:DOWN, ^ref, :process, ^manager, _reason} -> :ok
+    end
+
+    chunked_conn
+  end
+
+  defp session_not_found(conn) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(404, JSON.encode!(%{error: "Session not found"}))
+    |> halt()
   end
 
   match(_, do: send_resp(conn, 404, "Not found"))

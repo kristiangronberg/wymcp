@@ -25,7 +25,13 @@ defmodule Wymcp.Methods.Initialized do
         # where socket.assigns carries process references.
         assigns = Map.put(state.assigns, :session_pid, session_pid)
 
-        case safe_init(server, state.client_info, assigns) do
+        telemetry_metadata = %{
+          server: server,
+          session_id: state.session_id,
+          request_id: conn.body_params["id"]
+        }
+
+        case safe_init(server, state.client_info, assigns, telemetry_metadata) do
           {:ok, assigns} when is_map(assigns) ->
             Session.put_assigns(session_pid, assigns)
             send_json(conn, %{})
@@ -58,10 +64,33 @@ defmodule Wymcp.Methods.Initialized do
   # Converting to {:error, reason} routes it into the graceful branch below
   # (log, terminate, internal_error). Same shape as
   # Wymcp.Methods.ToolsCall's rescue around a tool's run/2.
-  defp safe_init(server, client_info, assigns) do
-    server.init(client_info, assigns)
+  defp safe_init(server, client_info, assigns, telemetry_metadata) do
+    case server.init(client_info, assigns) do
+      {:error, reason} = rejection ->
+        Wymcp.Telemetry.emit(
+          :server,
+          :reject,
+          %{},
+          Map.put(telemetry_metadata, :reason, reason)
+        )
+
+        rejection
+
+      other ->
+        other
+    end
   rescue
     exception ->
+      Wymcp.Telemetry.emit(
+        :server,
+        :error,
+        %{},
+        Map.merge(telemetry_metadata, %{
+          exception: inspect(exception.__struct__),
+          error: Exception.message(exception)
+        })
+      )
+
       Logger.error("Server.init/2 raised: #{Exception.message(exception)}",
         crash_reason: {exception, __STACKTRACE__}
       )
@@ -69,6 +98,16 @@ defmodule Wymcp.Methods.Initialized do
       {:error, "#{inspect(exception.__struct__)}: #{Exception.message(exception)}"}
   catch
     kind, value ->
+      Wymcp.Telemetry.emit(
+        :server,
+        :error,
+        %{},
+        Map.merge(telemetry_metadata, %{
+          exception: Atom.to_string(kind),
+          error: inspect(value)
+        })
+      )
+
       Logger.error("Server.init/2 #{kind}: #{inspect(value)}",
         crash_reason: {value, __STACKTRACE__}
       )

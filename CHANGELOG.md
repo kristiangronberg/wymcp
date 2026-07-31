@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0]
+
+### Added
+
+- `tools/call` accepts a request whose `"arguments"` key is absent or JSON
+  null. Absent is what the MCP schema allows (`CallToolRequestParams`
+  requires only `"name"`); JSON null is deliberate leniency beyond the
+  schema, which types `"arguments"` as an object. Both read as the empty
+  object before tool-level validation, so a bare `{"name": "help"}` call
+  answers the help index. Arguments that are present but not an object
+  still answer -32602.
+- Telemetry events `[:wymcp, :server, :reject]` (the consumer's
+  `Wymcp.Server.init/2` returned `{:error, reason}`) and
+  `[:wymcp, :server, :error]` (it raised, exited, or threw), mirroring the
+  `[:wymcp, :auth, :reject]` / `[:wymcp, :auth, :error]` pair. See the
+  `Wymcp.Telemetry` catalog.
+
+### Changed
+
+- DELETE without an `Mcp-Session-Id` header answers HTTP 400 (was 404),
+  matching GET and the spec's SHOULD for requests without the header.
+  Unknown sessions still answer 404 on both verbs.
+- A malformed `Last-Event-ID` resumption point is discarded with a warning
+  log naming the raw value ("SSE resumption point discarded, …"); a
+  well-formed header keeps the info "reconnected" line. `evt-0` is a
+  legitimate resumption point, not a discard.
+- SSE stream startup is two-phase: the `StreamManager` registers with the
+  session before the router commits the 200, then receives the chunked conn
+  via the new `attach/2`. A session dying during startup now answers a clean
+  404 Session-not-found before any bytes are sent; previously the
+  registration race crashed the request process after the 200 was committed,
+  truncating the response mid-stream. (`StreamManager.start_opts` loses its
+  `:conn` key accordingly.)
+- A new GET now really replaces the previous SSE stream: registering a new
+  `StreamManager` stops the old one, closing its connection — as the
+  moduledoc always claimed. The old manager is asked to stop and exits
+  `:normal`, so the replaced GET request finishes its response instead of
+  being torn down with it. Previously the old manager lingered until its
+  next write failed.
+
+### Removed
+
+- `Wymcp.Transport.StreamManager.shutdown/1` — nothing in the library called
+  it; stream replacement is handled by the session and shutdown by
+  monitor-based cleanup. Call `GenServer.stop/1` if you need to stop a
+  stream manually.
+- The unused `Wymcp.StreamSupervisor` (`Task.Supervisor`) is removed from
+  the supervision tree — stream managers have always been started by the
+  GET request process, never under this supervisor.
+
+### Fixed
+
+- A duplicated `Origin`, `Mcp-Session-Id`, or `MCP-Protocol-Version` request
+  header answers HTTP 400 naming the header and the fix ("send exactly one …
+  header") instead of crashing with a 500 (`CaseClauseError`). POST answers
+  carry the JSON-RPC `invalid_request` envelope; GET and DELETE answer the
+  routes' plain-JSON error shape for `Mcp-Session-Id`. (The `Origin` check
+  runs in the POST plug pipeline only — GET and DELETE do not validate
+  `Origin`, unchanged in this release.)
+- A sampling or elicitation request (`Wymcp.Context.sample/3`,
+  `Wymcp.Context.elicit/4`) issued while the SSE stream is registered but not
+  yet attached now answers `{:error, :no_stream}` immediately. It previously
+  waited out its full timeout and answered `{:error, :timeout}` for a request
+  that had never been delivered. The push result is now forwarded to the
+  caller in general, so a stream whose chunk write fails answers
+  `{:error, :disconnected}` — a return shape that previously never reached
+  these functions.
+
 ## [0.8.2]
 
 ### Removed

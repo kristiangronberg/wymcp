@@ -300,10 +300,15 @@ defmodule Wymcp.Session do
   @doc """
   Registers (or clears) the SSE stream process for this session.
 
-  When a StreamManager starts, it calls this to associate itself with
-  the session. The session monitors the stream pid — if the stream
-  crashes (client disconnected), the session automatically clears
-  the reference via the :DOWN handler.
+  A StreamManager calls this from its `init/1` to associate itself with
+  the session. The session monitors the stream pid — if the stream dies,
+  the session clears the reference via the :DOWN handler. Registering a
+  new pid while another stream is registered stops the old manager first,
+  closing its connection: only one active SSE stream per session, so a
+  reconnecting client does not leave a zombie stream behind. The old
+  manager is *asked* to stop rather than killed — it exits `:normal`, the
+  one reason its link to the GET request process that started it does not
+  carry fatally, so that request still finishes its response.
 
   Pass `nil` to explicitly clear the stream (e.g. on graceful close).
   """
@@ -326,15 +331,18 @@ defmodule Wymcp.Session do
   Pushes a server-initiated request to the client via SSE and blocks
   until the client POSTs back a response.
 
-  This is the mechanism behind `Context.sample/3` and `Context.elicit/3`.
+  This is the mechanism behind `Context.sample/3` and `Context.elicit/4`.
   The caller is blocked via GenServer's deferred reply pattern — the
   `handle_call` returns `:noreply` and stores the caller's `from`
   reference. When `deliver_response/3` arrives with the matching
   request_id, the GenServer replies to the stored `from`.
 
-  Returns `{:error, :no_stream}` immediately if no SSE stream is
-  connected. Returns `{:error, :timeout}` if the client does not
-  respond within `timeout` milliseconds.
+  Returns `{:error, :no_stream}` immediately when no SSE stream is
+  connected — or when one is registered but has not yet received its conn
+  (the router's start→attach window). A stream whose write fails answers
+  `{:error, :disconnected}`, equally immediately. `{:error, :timeout}`
+  therefore means what it says: the request reached the client and no
+  response came back within `timeout` milliseconds.
   """
   def await_client_response(pid, request_id, message, timeout) do
     GenServer.call(pid, {:await_client_response, request_id, message, timeout}, timeout + 1000)
@@ -465,9 +473,22 @@ defmodule Wymcp.Session do
   end
 
   def handle_call({:register_stream, stream_pid}, _from, state) when is_pid(stream_pid) do
-    if state.stream_monitor_ref, do: Process.demonitor(state.stream_monitor_ref, [:flush])
-    ref = Process.monitor(stream_pid)
-    {:reply, :ok, %{state | stream_pid: stream_pid, stream_monitor_ref: ref}}
+    if Process.alive?(stream_pid) do
+      if state.stream_monitor_ref, do: Process.demonitor(state.stream_monitor_ref, [:flush])
+      stop_replaced_stream(state.stream_pid, stream_pid)
+      ref = Process.monitor(stream_pid)
+      {:reply, :ok, %{state | stream_pid: stream_pid, stream_monitor_ref: ref}}
+    else
+      # A dead pid here is a poison message: the manager's own register
+      # call timed out (its start_link answered :ignore and it exited), but
+      # a timed-out GenServer.call leaves the request in this mailbox, so
+      # it still gets dequeued. Acting on it would stop the healthy current
+      # stream and end with a nil stream_pid — leave the registration
+      # untouched instead. In the live flow the manager is blocked in this
+      # very call, so alive-at-dispatch cannot regress to dead-at-handling
+      # except through that abandonment.
+      {:reply, :ok, state}
+    end
   end
 
   def handle_call({:push_event, _message}, _from, %{stream_pid: nil} = state) do
@@ -485,15 +506,21 @@ defmodule Wymcp.Session do
         {:reply, {:error, :no_stream}, state}
 
       stream_pid ->
-        # Push the request to the client via SSE
-        GenServer.call(stream_pid, {:push, message})
+        # Mirrors push_event/2: whatever the stream answers is the caller's
+        # answer. A manager registered but not yet attached says
+        # {:error, :no_stream}; a broken socket says {:error, :disconnected}.
+        # Both are immediate and true, whereas storing the request and
+        # scheduling a timeout would make an undelivered request look like a
+        # client that never answered.
+        case GenServer.call(stream_pid, {:push, message}) do
+          :ok ->
+            timer_ref = Process.send_after(self(), {:server_request_timeout, request_id}, timeout)
+            pending = Map.put(state.pending_server_requests, request_id, {from, timer_ref})
+            {:noreply, %{state | pending_server_requests: pending}}
 
-        # Set up timeout
-        timer_ref = Process.send_after(self(), {:server_request_timeout, request_id}, timeout)
-
-        # Store the pending request — reply later via deliver_response
-        pending = Map.put(state.pending_server_requests, request_id, {from, timer_ref})
-        {:noreply, %{state | pending_server_requests: pending}}
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -558,6 +585,19 @@ defmodule Wymcp.Session do
     GenServer.call(stream_pid, {:push, message})
     :ok
   end
+
+  # Asking, not killing. The old manager is linked to the GET request process
+  # that started it (StreamManager.start_link/1), and an untrappable
+  # Process.exit(old_pid, :kill) propagates :killed across that link, tearing
+  # the request process down before it can finish its response (probed).
+  # The cast is also the only non-blocking option: a synchronous
+  # GenServer.stop/1 from inside this handle_call stalls the session whenever
+  # the old manager is itself blocked in a call or a chunk write. The old
+  # monitor is already flushed, so the manager's DOWN cannot clear the new
+  # registration.
+  defp stop_replaced_stream(nil, _new_pid), do: :ok
+  defp stop_replaced_stream(same_pid, same_pid), do: :ok
+  defp stop_replaced_stream(old_pid, _new_pid), do: GenServer.cast(old_pid, :replaced)
 
   # -- Idle timeout --
 

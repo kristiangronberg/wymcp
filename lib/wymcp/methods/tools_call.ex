@@ -10,7 +10,7 @@ defmodule Wymcp.Methods.ToolsCall do
     request = conn.body_params
     params = request["params"] || %{}
     name = params["name"]
-    arguments = params["arguments"]
+    arguments = default_arguments(params["arguments"])
     tools = resolve_tools(conn, compile_tools)
 
     cond do
@@ -22,11 +22,11 @@ defmodule Wymcp.Methods.ToolsCall do
           })
         )
 
-      is_nil(arguments) or not is_map(arguments) ->
+      not is_map(arguments) ->
         send_json(
           conn,
           JsonRpc.error_response(:invalid_params, request["id"], %{
-            reason: "Missing or invalid 'arguments' in params"
+            reason: "Invalid 'arguments' in params: expected an object"
           })
         )
 
@@ -38,6 +38,13 @@ defmodule Wymcp.Methods.ToolsCall do
   defp resolve_tools(conn, _compile_tools) do
     Session.get_tools(conn.assigns[:wymcp_session_pid])
   end
+
+  # Absent and JSON-null arguments are indistinguishable after decode; the
+  # MCP schema (CallToolRequestParams) requires only "name", so both read as
+  # the empty object. Present-but-not-an-object (5, "x", false) stays -32602
+  # in run/2's cond — which is why this is not `arguments || %{}`.
+  defp default_arguments(nil), do: %{}
+  defp default_arguments(arguments), do: arguments
 
   defp execute_tool(conn, tools, name, arguments) do
     request = conn.body_params
