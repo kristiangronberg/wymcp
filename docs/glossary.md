@@ -27,6 +27,12 @@ object.
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
 
+**event ID**
+The monotonic per-event SSE identifier (`evt-N`), carried on the wire as
+the SSE `id` field and read back from the `Last-Event-ID` request header.
+A reconnect resumes the counter; replay of missed events is not
+implemented.
+
 **help**
 The framework-owned introspection tool — the server's entire introspection
 surface; defined at its code home, `Wymcp.Help` (moduledoc).
@@ -38,6 +44,15 @@ tool-dialect error payload, telling the LLM which help call explains the
 surface it just misused. The pointer string is a legal call, never a
 prose hint; its format lives in one internal builder (`Wymcp.Tool`).
 _Avoid_: help link, help hint
+
+**keepalive**
+The periodic SSE comment (default 15 s) that keeps a stream's connection
+from being idle-disconnected by proxies. Distinct from the session idle
+timeout.
+
+**priming event**
+The initial empty SSE event a new stream sends, giving the client an
+event ID for reconnection.
 
 **reserved name**
 `Wymcp.Help.uses_reserved_name?/1`
@@ -122,9 +137,6 @@ end collect the synonym sets that span entries.
 - **stream** — the chunked SSE connection for one session; one active stream per session, a new GET replaces the old. (`Wymcp.Transport.StreamManager`)
 - **StreamManager** — the GenServer owning a session's SSE connection, a separate process from the Session. (`Wymcp.Transport.StreamManager`)
 - **push event** — sending a JSON-RPC message to the client over SSE; `Session.push_event` delegates to `StreamManager.push` (near-synonym pair). (`Wymcp.Session`, `Wymcp.Transport.StreamManager`)
-- **priming event** — the initial empty SSE event giving the client an event ID for reconnection. (`Wymcp.Transport.StreamManager`)
-- **keepalive** — the periodic SSE comment preventing proxy idle-disconnect (default 15 s). Distinct from the session idle timeout. (`Wymcp.Transport.Stream`, `Wymcp.Transport.StreamManager`)
-- **event ID** (`evt-N`, `Last-Event-ID`) — the monotonic per-event SSE identifier for resumability; the header is read but replay is not implemented. (`Wymcp.Transport.StreamManager`, `Wymcp.Transport.SSE`)
 - **message classification** — tagging each inbound JSON-RPC message as `:request` / `:notification` / `:response` / `:unknown` (`conn.assigns.wymcp_message_type`) so responses bypass validation and reach deliver_response. (`Wymcp.Plugs.Classify`)
 
 ### Server-initiated requests
