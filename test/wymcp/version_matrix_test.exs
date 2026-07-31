@@ -1,11 +1,5 @@
 defmodule Wymcp.VersionMatrixTest do
-  use ExUnit.Case, async: true
-
   @moduledoc """
-  Integration matrix: for every supported protocol version, walk
-  initialize → tools/list → tools/call and assert the response shape
-  matches what that version expects.
-
   Each test runs once per version. The version is interpolated into
   the `describe` heading so a failing run prints:
 
@@ -14,18 +8,9 @@ defmodule Wymcp.VersionMatrixTest do
 
   This makes "which version regressed" obvious without inspecting the
   assertion.
-
-  ## Per-version expectations
-
-  - `2025-03-26` (floor): no `MCP-Protocol-Version` header required;
-    `outputSchema`, tool `title`, and `structuredContent` MUST NOT
-    appear; `serverInfo` extensions are stripped.
-  - `2025-06-18`: header required on follow-ups; `outputSchema`,
-    `title`, and `structuredContent` SHOULD appear when tools declare
-    them; `serverInfo` extensions are kept.
-  - `2025-11-25`: same as 06-18 from wymcp's perspective (tasks and
-    URL elicitation are out of scope).
   """
+
+  use ExUnit.Case, async: true
 
   import Plug.Test
   import Plug.Conn

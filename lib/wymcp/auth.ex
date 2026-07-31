@@ -40,10 +40,6 @@ defmodule Wymcp.Auth do
   401 with a `WWW-Authenticate: Bearer` challenge when the token is missing or
   invalid. The `Wymcp.Plugs.Auth` plug handles this response format automatically
   when `c:authenticate/1` returns `{:error, _}`.
-
-  ## Related Modules
-
-  See: `Wymcp.Auth.Noop`, `Wymcp.Plugs.Auth`
   """
 
   @doc """

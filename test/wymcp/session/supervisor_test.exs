@@ -1,26 +1,12 @@
 defmodule Wymcp.Session.SupervisorTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for session lifecycle under the DynamicSupervisor.
-
-  Sessions are started via `Wymcp.Session.start_session/1` which
-  delegates to the DynamicSupervisor. Each session is an independent
-  GenServer that can be stopped without affecting others.
-  """
-
   alias Wymcp.Session
+  alias Wymcp.Testing
 
   describe "start_session/1" do
     test "starts a session under the supervisor and returns pid + session_id" do
-      {:ok, pid, session_id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil
-        })
+      {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts())
 
       assert is_pid(pid)
       assert is_binary(session_id)
@@ -28,13 +14,7 @@ defmodule Wymcp.Session.SupervisorTest do
     end
 
     test "each session gets a unique session_id" do
-      opts = %{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      }
+      opts = Testing.build_session_opts()
 
       {:ok, _, id1} = Session.start_session(opts)
       {:ok, _, id2} = Session.start_session(opts)

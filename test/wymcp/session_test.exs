@@ -1,24 +1,8 @@
 defmodule Wymcp.SessionTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.Session GenServer.
-
-  A session is created during MCP initialization and lives for the
-  duration of the client connection. It stores the negotiated protocol
-  version and both client and server capabilities. The session ID is
-  a random URL-safe string generated at start time.
-
-  Sessions are identified by their session_id (a string) and can be
-  looked up via Registry. The GenServer is started under a
-  DynamicSupervisor by the initialize method handler.
-
-  Sessions include an idle timeout — if no request arrives within the
-  configured timeout period, the session terminates itself. This
-  prevents orphaned sessions from accumulating in production.
-  """
-
   alias Wymcp.Session
+  alias Wymcp.Testing
   alias Wymcp.Transport.StreamManager
 
   defmodule TerminateTracker do
@@ -124,18 +108,31 @@ defmodule Wymcp.SessionTest do
     def run_action(:run, _data, _ctx), do: {:ok, %{}}
   end
 
+  defmodule StrayKeyRuntimeTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "stray_key_runtime_tool"
+
+    @impl true
+    def description, do: "Carries an action-schema key outside the vocabulary"
+
+    @impl true
+    def actions do
+      %{run: %{description: "Run", properties: %{}, example: [%{}]}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx), do: {:ok, %{}}
+  end
+
   describe "start_link/1" do
     test "starts a session and stores capabilities" do
       {:ok, pid} =
         Session.start_link(
           {"test-session-1",
-           %{
-             client_capabilities: %{"sampling" => %{}},
-             client_info: %{"name" => "test", "version" => "1.0"},
-             protocol_version: "2025-11-25",
-             tools: [],
-             auth: nil
-           }}
+           Testing.build_session_opts(client_capabilities: %{"sampling" => %{}})}
         )
 
       assert is_pid(pid)
@@ -153,17 +150,7 @@ defmodule Wymcp.SessionTest do
 
   describe "mark_ready/1" do
     test "transitions status from initializing to ready" do
-      {:ok, pid} =
-        Session.start_link(
-          {"test-ready-1",
-           %{
-             client_capabilities: %{},
-             client_info: %{"name" => "test", "version" => "1.0"},
-             protocol_version: "2025-11-25",
-             tools: [],
-             auth: nil
-           }}
-        )
+      {:ok, pid} = Session.start_link({"test-ready-1", Testing.build_session_opts()})
 
       assert Session.get_state(pid).status == :initializing
       :ok = Session.mark_ready(pid)
@@ -178,27 +165,13 @@ defmodule Wymcp.SessionTest do
          without side effects.
          """
     test "returns false for a new session" do
-      {:ok, pid, _id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil
-        })
+      {:ok, pid, _id} = Session.start_session(Testing.build_session_opts())
 
       refute Session.ready?(pid)
     end
 
     test "returns true after mark_ready" do
-      {:ok, pid, _id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil
-        })
+      {:ok, pid, _id} = Session.start_session(Testing.build_session_opts())
 
       Session.mark_ready(pid)
       assert Session.ready?(pid)
@@ -207,17 +180,7 @@ defmodule Wymcp.SessionTest do
 
   describe "get_state/1" do
     test "returns the full session state" do
-      {:ok, pid} =
-        Session.start_link(
-          {"test-state-1",
-           %{
-             client_capabilities: %{},
-             client_info: %{"name" => "test", "version" => "1.0"},
-             protocol_version: "2025-11-25",
-             tools: [],
-             auth: nil
-           }}
-        )
+      {:ok, pid} = Session.start_link({"test-state-1", Testing.build_session_opts()})
 
       state = Session.get_state(pid)
       assert %Session.State{} = state
@@ -227,17 +190,7 @@ defmodule Wymcp.SessionTest do
 
   describe "assigns" do
     test "put_assigns/2 merges new values into assigns" do
-      {:ok, pid} =
-        Session.start_link(
-          {"test-assigns-1",
-           %{
-             client_capabilities: %{},
-             client_info: %{"name" => "test", "version" => "1.0"},
-             protocol_version: "2025-11-25",
-             tools: [],
-             auth: nil
-           }}
-        )
+      {:ok, pid} = Session.start_link({"test-assigns-1", Testing.build_session_opts()})
 
       :ok = Session.put_assigns(pid, %{counter: 0, user: "alice"})
       state = Session.get_state(pid)
@@ -255,15 +208,7 @@ defmodule Wymcp.SessionTest do
 
       {:ok, pid} =
         Session.start_link(
-          {"test-timeout-1",
-           %{
-             client_capabilities: %{},
-             client_info: %{"name" => "test", "version" => "1.0"},
-             protocol_version: "2025-11-25",
-             tools: [],
-             auth: nil,
-             session_idle_timeout: 50
-           }}
+          {"test-timeout-1", Testing.build_session_opts(session_idle_timeout: 50)}
         )
 
       ref = Process.monitor(pid)
@@ -273,15 +218,7 @@ defmodule Wymcp.SessionTest do
     test "activity resets the idle timer" do
       {:ok, pid} =
         Session.start_link(
-          {"test-touch-1",
-           %{
-             client_capabilities: %{},
-             client_info: %{"name" => "test", "version" => "1.0"},
-             protocol_version: "2025-11-25",
-             tools: [],
-             auth: nil,
-             session_idle_timeout: 100
-           }}
+          {"test-touch-1", Testing.build_session_opts(session_idle_timeout: 100)}
         )
 
       # Touch session before timeout
@@ -294,14 +231,7 @@ defmodule Wymcp.SessionTest do
 
   describe "lookup/1" do
     test "finds a session by its session_id" do
-      {:ok, pid, session_id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil
-        })
+      {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts())
 
       assert {:ok, ^pid} = Session.lookup(session_id)
     end
@@ -313,14 +243,7 @@ defmodule Wymcp.SessionTest do
 
   describe "request tracking" do
     test "tracks and completes requests" do
-      {:ok, pid, _} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil
-        })
+      {:ok, pid, _} = Session.start_session(Testing.build_session_opts())
 
       :ok = Session.track_request(pid, "req-1", "tools/call")
       state = Session.get_state(pid)
@@ -342,14 +265,7 @@ defmodule Wymcp.SessionTest do
          """
     test "invokes server.terminate/2 on session shutdown" do
       {:ok, pid, _id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil,
-          server: TerminateTracker
-        })
+        Session.start_session(Testing.build_session_opts(server: TerminateTracker))
 
       # Store our pid in assigns so the terminate callback can notify us
       Session.put_assigns(pid, %{test_pid: self()})
@@ -359,15 +275,7 @@ defmodule Wymcp.SessionTest do
     end
 
     test "session works without server module" do
-      {:ok, pid, _id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil,
-          server: nil
-        })
+      {:ok, pid, _id} = Session.start_session(Testing.build_session_opts())
 
       assert is_pid(pid)
       Session.terminate_session(Session.get_state(pid).session_id)
@@ -472,9 +380,11 @@ defmodule Wymcp.SessionTest do
     test "raises on the reserved tool name and registers nothing" do
       {:ok, pid, _id} = start_session()
 
-      assert_raise ArgumentError, ~r/reserved name "help"/, fn ->
-        Session.register_tool(pid, ReservedNameRuntimeTool)
-      end
+      assert_raise ArgumentError,
+                   ~r/reserved name "help"\. The help tool is provided by Wymcp and cannot be replaced at runtime\./,
+                   fn ->
+                     Session.register_tool(pid, ReservedNameRuntimeTool)
+                   end
 
       assert Session.get_tools(pid) == []
     end
@@ -498,18 +408,21 @@ defmodule Wymcp.SessionTest do
 
       assert Session.get_tools(pid) == []
     end
+
+    test "raises on an action-schema key outside the vocabulary, same as boot validation" do
+      {:ok, pid, _id} = start_session()
+
+      assert_raise ArgumentError, ~r/unknown action-schema key/, fn ->
+        Session.register_tool(pid, StrayKeyRuntimeTool)
+      end
+
+      assert Session.get_tools(pid) == []
+    end
   end
 
   describe "protocol_version/1" do
     test "returns the negotiated protocol version" do
-      {:ok, pid, _session_id} =
-        Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{"name" => "test", "version" => "1.0"},
-          protocol_version: "2025-11-25",
-          tools: [],
-          auth: nil
-        })
+      {:ok, pid, _session_id} = Session.start_session(Testing.build_session_opts())
 
       assert Session.protocol_version(pid) == "2025-11-25"
     end
@@ -821,14 +734,9 @@ defmodule Wymcp.SessionTest do
 
     test "returns the session's pinned version when a session pid is assigned" do
       {:ok, _pid, session_id} =
-        Wymcp.Session.start_session(%{
-          client_capabilities: %{},
-          client_info: %{},
-          protocol_version: "2025-03-26",
-          tools: [],
-          auth: nil,
-          server: nil
-        })
+        Wymcp.Session.start_session(
+          Testing.build_session_opts(client_info: %{}, protocol_version: "2025-03-26")
+        )
 
       {:ok, pid} = Wymcp.Session.lookup(session_id)
 
@@ -874,13 +782,7 @@ defmodule Wymcp.SessionTest do
 
   defp start_ready_session do
     {:ok, pid, id} =
-      Session.start_session(%{
-        client_capabilities: %{"sampling" => %{}},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts(client_capabilities: %{"sampling" => %{}}))
 
     Session.mark_ready(pid)
     {:ok, pid, id}
@@ -923,14 +825,7 @@ defmodule Wymcp.SessionTest do
   end
 
   defp start_session do
-    Session.start_session(%{
-      client_capabilities: %{},
-      client_info: %{"name" => "test", "version" => "1.0"},
-      protocol_version: "2025-11-25",
-      tools: start_session_tools(),
-      auth: nil,
-      server: nil
-    })
+    Session.start_session(Testing.build_session_opts(tools: start_session_tools()))
   end
 
   defp start_session_tools, do: []

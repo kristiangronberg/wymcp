@@ -43,7 +43,7 @@ defmodule Wymcp.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv .formatter.exs mix.exs README.md LICENSE CLAUDE.md)
+      files: ~w(lib priv/schema.json .formatter.exs mix.exs README.md LICENSE)
     ]
   end
 

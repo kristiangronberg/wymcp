@@ -1,24 +1,6 @@
 defmodule Wymcp.Plugs.OriginCheckTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for Origin header validation (DNS rebinding protection).
-
-  Browser-based MCP clients send an Origin header. A malicious page on
-  the internet could make requests to localhost via DNS rebinding. The
-  OriginCheck plug validates Origin against a configurable allowlist
-  read from conn.assigns[:wymcp][:origin].
-
-  Three cases:
-  1. No Origin header -> pass through (non-browser clients: curl, SDKs)
-  2. Origin in allowlist -> pass through
-  3. Origin not in allowlist -> 403 Forbidden
-
-  When no allowlist is configured (default), all origins are allowed
-  for backwards compatibility. The plug runs before body parsing, so
-  error responses use request_id=nil.
-  """
-
   import Plug.Test
   import Plug.Conn
 

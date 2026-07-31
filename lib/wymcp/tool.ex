@@ -71,8 +71,9 @@ defmodule Wymcp.Tool do
   Action schemas are validated at server boot via `Wymcp.Router.init/1` and
   at runtime registration via `Wymcp.Session.register_tool/2`. A malformed
   schema (e.g. a `:required_one_of` group referencing a field not declared
-  in `:properties`) raises `ArgumentError` immediately, surfacing the
-  misconfiguration before any request is served.
+  in `:properties`, or a key outside the field list above) raises
+  `ArgumentError` immediately, surfacing the misconfiguration before any
+  request is served.
 
   ### Example: OR-of-AND required group
 
@@ -98,6 +99,21 @@ defmodule Wymcp.Tool do
     `handle_error/1`, `hints/2`, and `action_context/2`, then sends structured
     JSON with `error`, `hints`, and optional `context` keys
 
+  ## The generated `run/2`
+
+  `use Wymcp.Tool` also generates `run/2` — the framework's entry point to
+  the tool. It takes a `Wymcp.Context.t()` and the raw `arguments` map and
+  returns `{:ok, content}` or `{:error, String.t()}`; it never touches the
+  HTTP layer. `Wymcp.Methods.ToolsCall` builds the JSON-RPC response from
+  the returned tuple (and additionally accepts `{:ok, content,
+  assigns_updates}` from hand-written `run/2` implementations — see the
+  assigns section of `Wymcp.Session`).
+
+  An uncaught exception from `run/2` is contained rather than propagated:
+  `Wymcp.Methods.ToolsCall` rescues it and answers with `isError: true` and
+  a JSON diagnostic body (`errorType`, `tool`, `exception`, `message`), so a
+  tool need not rescue defensively in its own `run/2`.
+
   ## Optional callbacks
 
   - `hints/2` — returns a list of follow-up action suggestions. Default: `[]`
@@ -107,7 +123,10 @@ defmodule Wymcp.Tool do
     action, or `nil`. Receives `(action_atom, ctx)`, where `ctx` is the
     same `Wymcp.Context.t()` passed to `run_action/3`. Called by the
     `help` tool at action level and during normal action dispatch.
-    The map appears under a `"context"` key in the response.
+    The map appears under a `"context"` key in the response. The callback
+    is optional in the strict sense: a tool that does not export it gets
+    no `"context"` key, silently. When defined it must return `nil` or a
+    map — any other return raises, on the dispatch and help paths alike.
     Read per-request data from `ctx.assigns` rather than the process
     dictionary — `action_context` may be invoked from a process that
     did not run the auth plug.
@@ -156,6 +175,22 @@ defmodule Wymcp.Tool do
         }
 
   @type hint :: Wymcp.Hint.t()
+
+  # The canonical action-schema key vocabulary — the one code home for the
+  # list that @type action_schema, the moduledoc's "Action schema format"
+  # section, and the glossary's "action schema" entry document.
+  # Help.render_action/1 derives its Map.take from it; the validator below
+  # rejects keys outside it.
+  @action_schema_keys [
+    :description,
+    :properties,
+    :required,
+    :required_one_of,
+    :defaults,
+    :notes,
+    :related,
+    :examples
+  ]
 
   # -- Callbacks --
 
@@ -227,15 +262,7 @@ defmodule Wymcp.Tool do
       end
 
       def definition do
-        definition_data = %{
-          "name" => name(),
-          "description" => description(),
-          "inputSchema" => input_schema()
-        }
-
-        definition_data = Wymcp.Tool.maybe_put_title(definition_data, title())
-        definition_data = Wymcp.Tool.maybe_put_annotations(definition_data, annotations())
-        Wymcp.Tool.maybe_put_output_schema(definition_data, output_schema())
+        Wymcp.Tool.build_definition(__MODULE__)
       end
     end
   end
@@ -261,8 +288,12 @@ defmodule Wymcp.Tool do
     :ok
   end
 
+  @doc false
+  def action_schema_keys, do: @action_schema_keys
+
   defp validate_action_schema!(module, action, schema) do
     validate_action_name!(module, action)
+    validate_known_keys!(module, action, schema)
     validate_description!(module, action, schema)
     properties = validate_properties!(module, action, schema)
 
@@ -297,6 +328,23 @@ defmodule Wymcp.Tool do
     raise ArgumentError,
           "Tool #{inspect(module)} action #{inspect(action)}: " <>
             "an action name must be an atom"
+  end
+
+  # Catches misspellings (:example, :require) and invented vocabulary at
+  # boot and at runtime registration, where every other schema-shape error
+  # already surfaces — instead of the stray key silently vanishing from
+  # help and tools/list output.
+  defp validate_known_keys!(module, action, schema) do
+    case Map.keys(schema) -- @action_schema_keys do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "Tool #{inspect(module)} action #{inspect(action)}: unknown " <>
+                "action-schema key(s): #{inspect(Enum.sort(unknown))}. Known keys: " <>
+                Enum.map_join(@action_schema_keys, ", ", &inspect/1)
+    end
   end
 
   # :description and :properties are load-bearing at request time — the
@@ -646,10 +694,18 @@ defmodule Wymcp.Tool do
     {:error, module.handle_error(reason)}
   end
 
-  # -- Definition helpers (called from generated definition/0) --
+  # -- Help pointers --
 
-  # The help-pointer format lives here and nowhere else: both Wymcp.Help
-  # and Wymcp.Tool.dispatch/4 render pointers through these two clauses.
+  # The help-pointer format lives here and nowhere else: Wymcp.Help and
+  # Wymcp.Tool.dispatch/4 render every pointer through these arities.
+
+  # The module-less form points at the help index — used when the target
+  # tool is unknown or absent, so there is no module to name.
+  @doc false
+  def help_pointer do
+    "help {}"
+  end
+
   @doc false
   def help_pointer(module) do
     ~s|help {tool: "#{module.name()}"}|
@@ -659,6 +715,8 @@ defmodule Wymcp.Tool do
   def help_pointer(module, action_str) do
     ~s|help {tool: "#{module.name()}", action: "#{action_str}"}|
   end
+
+  # -- Error payloads --
 
   # One home for the wrong-action answer. Wymcp.Help's action level and
   # Wymcp.Tool.dispatch/4's error branch are the same signal to a calling
@@ -678,29 +736,71 @@ defmodule Wymcp.Tool do
      })}
   end
 
-  @doc false
-  def maybe_put_title(definition_data, nil), do: definition_data
+  # -- Definition assembly --
 
-  def maybe_put_title(definition_data, title) when is_binary(title),
+  # One assembly for every tool's wire definition: the generated
+  # definition/0 (use macro) and Wymcp.Help.definition/0 both call this,
+  # so a definition key added here reaches every tools/list entry — help
+  # included — without hand-sync. title/0, annotations/0, and
+  # output_schema/0 are optional callbacks; an absent one reads as nil,
+  # the same omit-the-key signal the maybe_put_* clauses already handle.
+  @doc false
+  def build_definition(module) when is_atom(module) do
+    title = if exports?(module, :title, 0), do: module.title()
+    annotations = if exports?(module, :annotations, 0), do: module.annotations()
+    output_schema = if exports?(module, :output_schema, 0), do: module.output_schema()
+
+    %{
+      "name" => module.name(),
+      "description" => module.description(),
+      "inputSchema" => module.input_schema()
+    }
+    |> maybe_put_title(title)
+    |> maybe_put_annotations(annotations)
+    |> maybe_put_output_schema(output_schema)
+  end
+
+  defp maybe_put_title(definition_data, nil), do: definition_data
+
+  defp maybe_put_title(definition_data, title) when is_binary(title),
     do: Map.put(definition_data, "title", title)
 
-  @doc false
-  def maybe_put_annotations(definition_data, nil), do: definition_data
+  defp maybe_put_annotations(definition_data, nil), do: definition_data
 
-  def maybe_put_annotations(definition_data, %{} = ann) when map_size(ann) > 0,
-    do: Map.put(definition_data, "annotations", ann)
+  defp maybe_put_annotations(definition_data, %{} = annotations) when map_size(annotations) > 0,
+    do: Map.put(definition_data, "annotations", annotations)
 
-  def maybe_put_annotations(definition_data, _), do: definition_data
+  defp maybe_put_annotations(definition_data, _), do: definition_data
 
-  @doc false
-  def maybe_put_output_schema(definition_data, nil), do: definition_data
+  defp maybe_put_output_schema(definition_data, nil), do: definition_data
 
-  def maybe_put_output_schema(definition_data, schema) when is_map(schema),
+  defp maybe_put_output_schema(definition_data, schema) when is_map(schema),
     do: Map.put(definition_data, "outputSchema", schema)
 
   # -- Helpers --
 
-  defp maybe_add_context(response, module, action, ctx) do
+  # Context injection shared by the dispatch path and Wymcp.Help's action
+  # level. action_context/2 is an optional callback: a tool that does not
+  # export it gets no :context key. A defined callback must return nil or
+  # a map — any other return raises (CaseClauseError), surfacing the
+  # contract violation instead of dropping it.
+  @doc false
+  def maybe_add_context(response, module, action, ctx) do
+    if exports?(module, :action_context, 2) do
+      add_action_context(response, module, action, ctx)
+    else
+      response
+    end
+  end
+
+  # function_exported?/3 is reliable only after a load (BEAM loads modules
+  # lazily) — ensure_loaded? keeps every optional-callback probe honest
+  # even for a module nothing has called yet.
+  defp exports?(module, function, arity) do
+    Code.ensure_loaded?(module) and function_exported?(module, function, arity)
+  end
+
+  defp add_action_context(response, module, action, ctx) do
     case module.action_context(action, ctx) do
       nil -> response
       context when is_map(context) -> Map.put(response, :context, context)

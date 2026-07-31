@@ -16,14 +16,6 @@ defmodule Wymcp.Transport.SSE do
 
   Messages must not contain embedded newlines. Events are separated by
   a blank line (`\\n\\n`).
-
-  ## Related Modules
-
-  See: `Wymcp.Transport.Stream`
-
-  ## Tests
-
-  See: `Wymcp.Transport.SSETest`
   """
 
   def encode(message, nil) do

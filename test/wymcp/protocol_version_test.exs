@@ -1,29 +1,6 @@
 defmodule Wymcp.ProtocolVersionTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the per-version feature gate and the strip helpers.
-
-  The `supported/0` list is the floor of what wymcp accepts. Adding or
-  removing a version here is an intentional API change — every test in
-  this file should fail loudly if the list changes by accident.
-
-  Per-feature predicates encode when each MCP wire feature was added.
-  These dates come from the official MCP changelogs:
-
-  - [2025-03-26](https://modelcontextprotocol.io/specification/2025-03-26/changelog) —
-    introduced Streamable HTTP, `Mcp-Session-Id`, tool `annotations`,
-    and the `instructions` field on `InitializeResult`. This is wymcp's
-    floor.
-  - [2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/changelog) —
-    introduced `outputSchema`, `structuredContent`, tool `title`, the
-    `MCP-Protocol-Version` HTTP header, the `serverInfo` extensions
-    (`title`, `description`, `websiteUrl`, `icons`), and elicitation.
-  - [2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/changelog) —
-    introduced URL-mode elicitation, sampling `tools`, and tasks
-    (none of which wymcp implements yet).
-  """
-
   alias Wymcp.ProtocolVersion
 
   describe "supported/0" do

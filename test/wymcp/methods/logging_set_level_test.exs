@@ -1,21 +1,10 @@
 defmodule Wymcp.Methods.LoggingSetLevelTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the logging/setLevel method handler.
-
-  logging/setLevel allows the client to configure the minimum log level
-  for the session. The server stores the level and only sends
-  notifications/message at or above that severity. The response is an
-  empty JSON-RPC success result.
-
-  Invalid log levels produce a JSON-RPC invalid_params error.
-  """
-
   import Plug.Test
   import Plug.Conn
 
-  alias Wymcp.{Methods.LoggingSetLevel, Session}
+  alias Wymcp.{Methods.LoggingSetLevel, Session, Testing}
 
   defp build_conn(level) do
     body = %{
@@ -25,14 +14,7 @@ defmodule Wymcp.Methods.LoggingSetLevelTest do
       "params" => %{"level" => level}
     }
 
-    {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+    {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
 

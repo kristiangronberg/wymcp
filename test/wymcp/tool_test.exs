@@ -1,22 +1,6 @@
 defmodule Wymcp.ToolTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.Tool behaviour.
-
-  Tool is the public-facing behaviour that consuming applications implement.
-  Each tool defines a name, description, an actions map, and a `run_action/3`
-  callback. The `use Wymcp.Tool` macro generates `input_schema/0` (action enum +
-  bare data object, from actions), `run/2` (dispatch with required field validation,
-  default application, hint injection, and error formatting), and `definition/0`
-  (MCP tool descriptor).
-
-  The generated `run/2` takes a `Wymcp.Context.t()` and returns
-  `{:ok, content}`, `{:ok, content, assigns}`, or `{:error, String.t()}` — it no
-  longer touches Plug.Conn directly. The method handler in ToolsCall is responsible
-  for building the HTTP response from the returned tuple.
-  """
-
   alias Wymcp.Context
 
   defmodule WidgetTool do
@@ -286,6 +270,53 @@ defmodule Wymcp.ToolTest do
     @impl Wymcp.Tool
     def run_action(:help, _data, _ctx), do: {:ok, %{answered: "help"}}
     def run_action(:describe, _data, _ctx), do: {:ok, %{answered: "describe"}}
+  end
+
+  defmodule BareBehaviourTool do
+    @moduledoc false
+    @behaviour Wymcp.Tool
+
+    @impl true
+    def name, do: "bare_behaviour"
+
+    @impl true
+    def description, do: "Implements the behaviour without the use macro"
+
+    @impl true
+    def actions do
+      %{ping: %{description: "Returns pong", properties: %{}}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:ping, _data, _ctx), do: {:ok, %{answer: "pong"}}
+
+    # Hand-written run/2 — the path a @behaviour-only tool takes into
+    # Wymcp.Tool.dispatch/4.
+    def run(ctx, %{"action" => action} = params) do
+      Wymcp.Tool.dispatch(__MODULE__, ctx, action, params["data"])
+    end
+  end
+
+  defmodule BadContextTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "bad_context"
+
+    @impl true
+    def description, do: "action_context returns a non-map"
+
+    @impl true
+    def actions do
+      %{ping: %{description: "Returns ok", properties: %{}}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:ping, _data, _ctx), do: {:ok, %{}}
+
+    @impl Wymcp.Tool
+    def action_context(_action, _ctx), do: "not a map"
   end
 
   defp build_ctx, do: %Context{session_pid: nil, session_id: "test", request_id: 1, assigns: %{}}
@@ -583,6 +614,20 @@ defmodule Wymcp.ToolTest do
       body = content |> hd() |> Map.get("text") |> JSON.decode!()
 
       assert body["context"]["seen_scope"] == "sentinel"
+    end
+
+    test "a behaviour-only tool without action_context/2 dispatches without crashing" do
+      result = BareBehaviourTool.run(build_ctx(), %{"action" => "ping"})
+      content = decode_json_content(result)
+
+      assert content["answer"] == "pong"
+      refute Map.has_key?(content, "context")
+    end
+
+    test "a defined action_context returning neither nil nor a map raises" do
+      assert_raise CaseClauseError, fn ->
+        BadContextTool.run(build_ctx(), %{"action" => "ping"})
+      end
     end
   end
 

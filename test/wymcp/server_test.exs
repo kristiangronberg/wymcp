@@ -1,21 +1,6 @@
 defmodule Wymcp.ServerTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the `Wymcp.Server` behaviour.
-
-  The Server behaviour provides lifecycle hooks for consuming applications.
-  The two callbacks — `init/2` and `terminate/2` — are both optional. A
-  module that `use`s `Wymcp.Server` without overriding either callback gets
-  working no-op defaults: `init/2` passes assigns through unchanged and
-  `terminate/2` returns `:ok`.
-
-  The behaviour is intentionally minimal — no `handle_request/2` or
-  `handle_notification/2`. In wymcp's Plug-based architecture, consuming
-  apps already have Plug middleware as an extension point before dispatch.
-  Session-aware interception is handled by tools via `ctx.assigns`.
-  """
-
   defmodule TestServer do
     @moduledoc false
     use Wymcp.Server

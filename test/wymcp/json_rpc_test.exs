@@ -1,23 +1,6 @@
 defmodule Wymcp.JsonRpcTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.JsonRpc module.
-
-  JsonRpc provides two categories of functionality:
-  1. Response envelope construction (success_response, error_response) — pure
-     functions that build JSON-RPC 2.0 compliant maps
-  2. MCP schema validation — validates incoming requests against the MCP protocol
-     JSON Schema (2020-12 dialect) shipped in priv/schema.json, using JSV
-
-  The error codes follow the JSON-RPC 2.0 specification:
-  - -32700: Parse error
-  - -32600: Invalid Request
-  - -32601: Method not found
-  - -32602: Invalid params
-  - -32603: Internal error
-  """
-
   alias Wymcp.JsonRpc
 
   describe "success_response/2" do

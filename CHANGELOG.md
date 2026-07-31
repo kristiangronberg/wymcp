@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[:wymcp, :server, :error]` (it raised, exited, or threw), mirroring the
   `[:wymcp, :auth, :reject]` / `[:wymcp, :auth, :error]` pair. See the
   `Wymcp.Telemetry` catalog.
+- The help tool's `missing_tool` and `unknown_tool` error payloads carry a
+  `help` key pointing at the help index (`help {}`) — all six tool-dialect
+  error payloads now carry a copyable help pointer.
+- `Wymcp.Testing.build_session_opts/1` builds the session-opts map
+  `Wymcp.Session.init/1` requires, with a test default per key. Every
+  `Wymcp.Testing` public function now carries `@doc` (with doctests where
+  pure).
+- `Wymcp.Help.uses_reserved_name?/1` — the reserved-name predicate the boot
+  scan and runtime registration now share.
 
 ### Changed
 
@@ -44,6 +53,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `:normal`, so the replaced GET request finishes its response instead of
   being torn down with it. Previously the old manager lingered until its
   next write failed.
+- **BREAKING:** boot and runtime-registration validation reject an action
+  schema carrying a key outside the eight-key vocabulary, so a misspelled
+  `:example` or `:require` fails when the tool is wired in
+  (`Wymcp.Router.init/1` at boot, `Session.register_tool/2` at registration)
+  instead of silently vanishing from help and `tools/list` output. The raise
+  message names the accepted keys — rename the stray key to its canonical
+  spelling. Verified against both known consumers: cai (7 keys) and ymer
+  (8 keys) use only canonical keys.
+- `Wymcp.Router.init/1` on already-initialized options (the injected
+  `Wymcp.Help` present in `:tools`) raises a message naming the double-init
+  instead of blaming the injected help tool with the reserved-name error.
+- The help tool's action level raises on an `action_context/2` return that
+  is neither `nil` nor a map, instead of silently dropping it — the callback
+  contract is enforced identically on the dispatch and help paths. (Not
+  marked breaking: the dispatch path already raised on such a return, so a
+  tool with a broken `action_context/2` was already failing on every normal
+  call; only help's path was lenient.)
+- The hex package no longer ships `CLAUDE.md` (agent guidance for developing
+  wymcp, not for consuming it) and ships `priv/schema.json` alone instead of
+  the whole `priv` directory.
 
 ### Removed
 
@@ -72,6 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller in general, so a stream whose chunk write fails answers
   `{:error, :disconnected}` — a return shape that previously never reached
   these functions.
+- A `@behaviour Wymcp.Tool` tool (implemented without the `use` macro) that
+  does not export the optional `action_context/2` callback no longer crashes
+  with `UndefinedFunctionError` when dispatched through
+  `Wymcp.Tool.dispatch/4`.
 
 ## [0.8.2]
 

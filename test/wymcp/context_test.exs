@@ -1,19 +1,7 @@
 defmodule Wymcp.ContextTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.Context struct and result builders.
-
-  Context is the tool's interface to the MCP server. It carries session
-  information, per-session assigns, and provides pure functions for
-  building MCP-compliant content arrays. Tools receive a Context and
-  return result tuples — they never interact with HTTP directly.
-
-  Result builders are pure functions: they take data and return content
-  arrays. No side effects, no process communication.
-  """
-
-  alias Wymcp.{Context, Session}
+  alias Wymcp.{Context, Session, Testing}
 
   describe "text/1" do
     test "builds a text content array" do
@@ -356,14 +344,13 @@ defmodule Wymcp.ContextTest do
          """
     test "returns :not_supported when session is pinned to 2025-03-26" do
       {:ok, _pid, session_id} =
-        Wymcp.Session.start_session(%{
-          client_capabilities: %{"elicitation" => %{}},
-          client_info: %{},
-          protocol_version: "2025-03-26",
-          tools: [],
-          auth: nil,
-          server: nil
-        })
+        Wymcp.Session.start_session(
+          Testing.build_session_opts(
+            client_capabilities: %{"elicitation" => %{}},
+            client_info: %{},
+            protocol_version: "2025-03-26"
+          )
+        )
 
       {:ok, pid} = Wymcp.Session.lookup(session_id)
 
@@ -376,13 +363,7 @@ defmodule Wymcp.ContextTest do
 
   defp build_session_context(client_capabilities) do
     {:ok, session_pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: client_capabilities,
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts(client_capabilities: client_capabilities))
 
     Session.mark_ready(session_pid)
 

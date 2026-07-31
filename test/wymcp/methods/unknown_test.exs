@@ -1,15 +1,6 @@
 defmodule Wymcp.Methods.UnknownTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.Methods.Unknown handler.
-
-  Unknown handles any JSON-RPC method the server does not recognize. Per
-  the JSON-RPC 2.0 spec, unrecognized methods must receive a -32601
-  (Method not found) error response. The original request is included
-  in the error's `data` field for debugging.
-  """
-
   import Plug.Test
 
   alias Wymcp.Methods.Unknown

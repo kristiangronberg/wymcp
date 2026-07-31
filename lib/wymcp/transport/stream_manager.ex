@@ -88,14 +88,6 @@ defmodule Wymcp.Transport.StreamManager do
           SM -->|monitors| S
       end
   ```
-
-  ## Related Modules
-
-  See: `Wymcp.Transport.Stream`, `Wymcp.Transport.SSE`, `Wymcp.Session`
-
-  ## Tests
-
-  See: `Wymcp.Transport.StreamManagerTest`
   """
 
   use GenServer

@@ -10,21 +10,23 @@ defmodule Wymcp.Help do
   `action` returns one action complete, with the target tool's
   `c:Wymcp.Tool.action_context/2` output under `"context"`. Resolution order
   is `tool` first, then `action` — `action` without `tool` is an error, and
-  unknown targets error naming the valid ones (`isError: true` content the
-  calling LLM can self-correct from), never a silent fallback to a broader
-  answer.
+  unknown targets error naming the valid ones and pointing at the help
+  index (`isError: true` content the calling LLM can self-correct from),
+  never a silent fallback to a broader answer.
 
   The index shares its content source with the `tools/list` description
   builder (`Wymcp.Tool.Schema.action_summaries/1`), so the two cannot drift.
   Server-level prose does not live here — it belongs in the initialize
   `instructions` router option.
 
-  This module implements the tool wire contract by hand (`definition/0`,
-  `input_schema/0`, `run/2`) rather than through `use Wymcp.Tool`: help has
-  no action dispatch, its two parameters live at the top level of
-  `arguments`, and its input schema sets `additionalProperties: false` so a
-  misspelled parameter is rejected by argument validation instead of
-  silently answering the index.
+  This module implements the tool wire contract by hand (`input_schema/0`,
+  `run/2`) rather than through `use Wymcp.Tool`: help has no action
+  dispatch, its two parameters live at the top level of `arguments`, and
+  its input schema sets `additionalProperties: false` so a misspelled
+  parameter is rejected by argument validation instead of silently
+  answering the index. Its `definition/0` is assembled by the same
+  `Wymcp.Tool.build_definition/1` every generated tool uses, so a
+  definition key added there reaches help without hand-sync.
 
   Every call emits `[:wymcp, :help, :called]` — see `Wymcp.Telemetry`.
 
@@ -34,7 +36,9 @@ defmodule Wymcp.Help do
       subgraph External
           R -->|"get_tools/1"| S[Session]
           R -->|"action_summaries/1"| SC[Tool.Schema]
-          R -->|"action_context/2"| T(Target tool)
+          R -->|"shared tool-surface helpers"| WT[Wymcp.Tool]
+          WT -->|"action_context/2"| T(Target tool)
+          H -->|"build_definition/1"| WT
           R --> TE[Telemetry]
       end
   ```
@@ -66,6 +70,19 @@ defmodule Wymcp.Help do
   @impl Wymcp.Tool
   def output_schema, do: nil
 
+  @doc """
+  True when `module` claims the reserved tool name.
+
+  The reserved name is `"help"` — the tool name only the framework may
+  use: consumer tools may neither claim it at boot (`Wymcp.Router.init/1`)
+  nor replace it at runtime (`Wymcp.Session.register_tool/2`). Both raise
+  sites route through this predicate; each keeps its own message tail
+  naming its path.
+  """
+  def uses_reserved_name?(module) when is_atom(module) do
+    module.name() == @name
+  end
+
   @doc false
   def input_schema do
     %{
@@ -85,9 +102,7 @@ defmodule Wymcp.Help do
   end
 
   @doc false
-  def definition do
-    %{"name" => @name, "description" => @description, "inputSchema" => input_schema()}
-  end
+  def definition, do: Wymcp.Tool.build_definition(__MODULE__)
 
   @doc false
   def run(%Context{} = ctx, params) when is_map(params) do
@@ -156,33 +171,16 @@ defmodule Wymcp.Help do
         response =
           %{tool: module.name(), action: action_name}
           |> Map.merge(render_action(schema))
-          |> add_context(module, action, ctx)
+          |> Wymcp.Tool.maybe_add_context(module, action, ctx)
 
         {:ok, Context.json(response)}
     end
   end
 
   defp render_action(schema) do
-    %{
-      description: schema.description,
-      properties: schema.properties,
-      required: Map.get(schema, :required, [])
-    }
-    |> Map.merge(Map.take(schema, [:required_one_of, :defaults, :notes, :related, :examples]))
-  end
-
-  defp add_context(response, module, action, ctx) do
-    # Hand-written tools need not export action_context/2; function_exported?
-    # is reliable here only after a load (BEAM loads modules lazily) — every
-    # session tool has been loaded by boot or registration validation, and
-    # ensure_loaded? keeps this true even if that ordering ever changes.
-    with true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, :action_context, 2),
-         context when is_map(context) <- module.action_context(action, ctx) do
-      Map.put(response, :context, context)
-    else
-      _ -> response
-    end
+    schema
+    |> Map.take(Wymcp.Tool.action_schema_keys())
+    |> Map.put_new(:required, [])
   end
 
   defp unknown_target(:missing_tool, action_name, tools) do
@@ -192,7 +190,8 @@ defmodule Wymcp.Help do
        message:
          "help with action '#{action_name}' requires a tool. " <>
            "Valid tools: #{Enum.join(tool_names(tools), ", ")}.",
-       valid_tools: tool_names(tools)
+       valid_tools: tool_names(tools),
+       help: Wymcp.Tool.help_pointer()
      })}
   end
 
@@ -202,7 +201,8 @@ defmodule Wymcp.Help do
        error: "unknown_tool",
        message:
          "Unknown tool '#{tool_name}'. Valid tools: #{Enum.join(tool_names(tools), ", ")}.",
-       valid_tools: tool_names(tools)
+       valid_tools: tool_names(tools),
+       help: Wymcp.Tool.help_pointer()
      })}
   end
 

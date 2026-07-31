@@ -1,18 +1,6 @@
 defmodule Wymcp.RouterTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Integration tests for the Wymcp.Router.
-
-  These tests exercise the full pipeline: JSON parsing -> auth -> session ->
-  validation -> dispatch -> method handler -> response. Each test sends a raw
-  JSON-RPC request and asserts on the HTTP response.
-
-  Tests that require a session (tools/list, tools/call, notifications) must
-  initialize first to get a session ID, then include it in subsequent requests.
-  Session-exempt methods (initialize, ping) work without a session header.
-  """
-
   import ExUnit.CaptureLog
   import Plug.Test
   import Plug.Conn
@@ -345,6 +333,25 @@ defmodule Wymcp.RouterTest do
     def title, do: nil
     def annotations, do: nil
     def output_schema, do: nil
+  end
+
+  defmodule StrayKeyTool do
+    use Wymcp.Tool
+
+    def name, do: "stray_key_tool"
+    def description, do: "Carries an action-schema key outside the vocabulary"
+
+    def actions do
+      %{
+        noop: %{
+          description: "Does nothing",
+          properties: %{},
+          example: [%{}]
+        }
+      }
+    end
+
+    def run_action(:noop, _data, _ctx), do: {:ok, %{}}
   end
 
   defmodule MissingDescriptionTool do
@@ -1497,8 +1504,18 @@ defmodule Wymcp.RouterTest do
 
   describe "help auto-injection" do
     test "init raises when a consumer tool claims the reserved name" do
-      assert_raise ArgumentError, ~r/reserved name "help"/, fn ->
-        Wymcp.Router.init(tools: [ReservedNameTool])
+      assert_raise ArgumentError,
+                   ~r/reserved name "help"\. The help tool is provided by Wymcp and injected into every server automatically\./,
+                   fn ->
+                     Wymcp.Router.init(tools: [ReservedNameTool])
+                   end
+    end
+
+    test "init raises the double-init message when given already-initialized opts" do
+      initialized = Wymcp.Router.init(tools: [TestTool])
+
+      assert_raise ArgumentError, ~r/already been through Wymcp\.Router\.init\/1/, fn ->
+        Wymcp.Router.init(initialized)
       end
     end
 
@@ -1668,6 +1685,12 @@ defmodule Wymcp.RouterTest do
     test "raises when an action description contains a newline" do
       assert_raise ArgumentError, ~r/newline/, fn ->
         Wymcp.Router.init(tools: [NewlineDescriptionTool])
+      end
+    end
+
+    test "raises when an action carries a key outside the schema vocabulary" do
+      assert_raise ArgumentError, ~r/unknown action-schema key/, fn ->
+        Wymcp.Router.init(tools: [StrayKeyTool])
       end
     end
 

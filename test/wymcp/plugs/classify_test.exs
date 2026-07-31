@@ -1,22 +1,6 @@
 defmodule Wymcp.Plugs.ClassifyTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the message classification plug.
-
-  Every incoming POST body is one of three JSON-RPC message types:
-  a request (has "method" + "id"), a notification (has "method", no "id"),
-  or a response (has "id" + ("result" or "error"), no "method"). The
-  classify plug tags the type in conn.assigns so downstream plugs can
-  branch on it without repeating the detection logic.
-
-  The classification rules follow JSON-RPC 2.0:
-  - Requests: MUST have "method" (string) and "id"
-  - Notifications: MUST have "method" (string), MUST NOT have "id"
-  - Responses: MUST have "id", MUST NOT have "method", MUST have
-    "result" or "error"
-  """
-
   import Plug.Test
 
   alias Wymcp.Plugs.Classify

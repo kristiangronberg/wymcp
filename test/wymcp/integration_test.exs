@@ -1,15 +1,6 @@
 defmodule Wymcp.IntegrationTest do
   use ExUnit.Case
 
-  @moduledoc """
-  End-to-end test of the complete MCP lifecycle.
-
-  Exercises: initialize → notifications/initialized → tools/list →
-  tools/call → tools/call (verifying assigns persist) → DELETE session.
-  Verifies session ID propagation, proper response structure, assigns
-  persistence, and clean session termination.
-  """
-
   import Plug.Test
   import Plug.Conn
 

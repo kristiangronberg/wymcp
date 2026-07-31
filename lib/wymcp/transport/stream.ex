@@ -12,14 +12,6 @@ defmodule Wymcp.Transport.Stream do
   an SSE comment that maintains the connection without triggering
   client-side event handlers. The caller is responsible for scheduling
   keepalive messages (e.g. via `Process.send_after`).
-
-  ## Related Modules
-
-  See: `Wymcp.Transport.SSE`
-
-  ## Tests
-
-  See: `Wymcp.Transport.StreamTest`
   """
 
   import Plug.Conn

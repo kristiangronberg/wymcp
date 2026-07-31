@@ -1,22 +1,6 @@
 defmodule Wymcp.Methods.ToolsCallOutputSchemaTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for structured tool output via `output_schema/0`.
-
-  The MCP spec allows tools to declare an `outputSchema` — a JSON Schema
-  describing the structure of the tool's response. When a tool declares
-  `output_schema/0`, two things change:
-
-  1. `definition/0` includes an `"outputSchema"` key so clients know
-     structured output is available.
-  2. `tools/call` validates the tool's response against the schema and
-     includes `"structuredContent"` in the result alongside `"content"`.
-
-  Tools without `output_schema/0` behave exactly as before — no
-  `"outputSchema"` in the definition, no `"structuredContent"` in results.
-  """
-
   import Plug.Test
   import Plug.Conn
 

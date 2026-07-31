@@ -1,18 +1,6 @@
 defmodule Wymcp.Methods.RuntimeToolsTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests that tools/list and tools/call see runtime-registered tools.
-
-  When a session has runtime tools registered (via Session.register_tool/2),
-  both tools/list and tools/call must see them. Runtime tools are merged
-  with compile-time tools, with runtime taking precedence on name collision.
-
-  All non-exempt requests require a valid session — the sessionless fallback
-  has been removed. Without a session, the request is rejected before reaching
-  tools/list or tools/call.
-  """
-
   import Plug.Test
   import Plug.Conn
 

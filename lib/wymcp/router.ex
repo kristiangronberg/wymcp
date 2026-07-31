@@ -68,7 +68,9 @@ defmodule Wymcp.Router do
   - `:server` — module implementing the `Wymcp.Server` behaviour for session
     lifecycle hooks (optional, defaults to `nil`)
   - `:origin` — list of allowed Origin header values for DNS rebinding protection
-    (optional, defaults to allowing all origins)
+    (optional, defaults to allowing all origins). A request with no Origin
+    header passes the check even when an allowlist is configured — non-browser
+    clients (curl, SDKs) do not send one
   - `:instructions` — a string included in the initialize response that guides
     how an LLM should interact with this server's tools (optional)
   - `:server_info` — a map of optional server identity fields displayed by MCP
@@ -79,6 +81,11 @@ defmodule Wymcp.Router do
     `"dark"`). Any other key in an icon map is dropped and a warning is
     logged. These fields are merged with `name` and `version` from
     application config (optional).
+
+  POST requests run `Wymcp.Plugs.Pipeline`'s plug chain in order:
+  `Wymcp.Plugs.OriginCheck`, JSON body parsing, `Wymcp.Plugs.Classify`,
+  `Wymcp.Plugs.Auth`, `Wymcp.Plugs.Session`, `Wymcp.Plugs.Validate`,
+  `Wymcp.Plugs.Dispatch`.
 
   ```mermaid
   flowchart TD
@@ -112,6 +119,7 @@ defmodule Wymcp.Router do
 
   def init(opts) do
     consumer_tools = Keyword.get(opts, :tools, [])
+    validate_not_reinitialized!(consumer_tools)
     validate_reserved_tool_names!(consumer_tools)
     validate_unique_tool_names!(consumer_tools)
 
@@ -124,8 +132,23 @@ defmodule Wymcp.Router do
     super(opts)
   end
 
+  # Only the framework's own module in the incoming list signals a
+  # re-init — a consumer module whose name() is "help" gets the
+  # reserved-name raise below instead. Must run before the reserved-name
+  # scan, which would otherwise blame the injected Wymcp.Help itself.
+  defp validate_not_reinitialized!(tools) do
+    if Wymcp.Help in tools do
+      raise ArgumentError,
+            "Wymcp.Help found in the :tools option — these options have already been " <>
+              "through Wymcp.Router.init/1. Initialize from the original options instead " <>
+              "of re-initializing the returned ones."
+    end
+
+    :ok
+  end
+
   defp validate_reserved_tool_names!(tools) do
-    case Enum.find(tools, &(&1.name() == Wymcp.Help.name())) do
+    case Enum.find(tools, &Wymcp.Help.uses_reserved_name?/1) do
       nil ->
         :ok
 

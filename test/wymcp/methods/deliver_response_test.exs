@@ -1,25 +1,12 @@
 defmodule Wymcp.Methods.DeliverResponseTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the DeliverResponse method handler.
-
-  When a client POSTs a JSON-RPC response (answer to a server-initiated
-  request like sampling/createMessage), the router pipeline classifies it
-  as :response and Dispatch routes it here. DeliverResponse extracts the
-  request_id and result/error, calls Session.deliver_response/3, and
-  returns HTTP 202 Accepted with an empty body.
-
-  The actual response delivery is tested in SessionTest — these tests
-  verify the HTTP-level behavior: correct status codes, proper extraction
-  of result vs error, and handling of sessions.
-  """
-
   import Plug.Test
   import Plug.Conn
 
   alias Wymcp.Methods.DeliverResponse
   alias Wymcp.Session
+  alias Wymcp.Testing
 
   test "returns 202 for a result response" do
     {:ok, pid, session_id} = start_ready_session()
@@ -60,14 +47,7 @@ defmodule Wymcp.Methods.DeliverResponseTest do
   end
 
   defp start_ready_session do
-    {:ok, pid, id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+    {:ok, pid, id} = Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
     {:ok, pid, id}

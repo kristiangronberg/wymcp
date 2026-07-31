@@ -86,17 +86,6 @@ defmodule Wymcp.ProtocolVersion do
   Migration trigger: when adding the third primitive (resources),
   revisit this section. With four+ primitives the table form starts to
   pay back the loss in call-site clarity.
-
-  ## Related Modules
-
-  See: `Wymcp.Session` (provides the conn-aware resolver
-  `negotiated_version/1`), `Wymcp.Methods.Initialize`,
-  `Wymcp.Plugs.Session`, `Wymcp.Methods.ToolsList`,
-  `Wymcp.Methods.ToolsCall`, `Wymcp.Context`.
-
-  ## Tests
-
-  See: `Wymcp.ProtocolVersionTest`
   """
 
   @supported ~w(2025-11-25 2025-06-18 2025-03-26)

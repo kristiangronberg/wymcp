@@ -1,17 +1,6 @@
 defmodule Wymcp.Transport.SSETest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for SSE event encoding.
-
-  The MCP Streamable HTTP transport uses Server-Sent Events to stream
-  JSON-RPC messages from server to client. Each event has an optional
-  ID (for resumability) and a data field containing a JSON-RPC message.
-
-  The SSE format is: `id: <id>\\ndata: <json>\\n\\n`
-  Messages MUST NOT contain embedded newlines.
-  """
-
   alias Wymcp.Transport.SSE
 
   describe "encode/2" do

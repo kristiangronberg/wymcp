@@ -5,7 +5,9 @@ defmodule Wymcp.Server do
   Implement this behaviour to run custom logic when a session becomes ready
   (after the `notifications/initialized` handshake) and when it shuts down.
 
-  Both callbacks are optional — `use Wymcp.Server` provides working defaults.
+  Both callbacks are optional — `use Wymcp.Server` provides working no-op
+  defaults: `init/2` returns `{:ok, assigns}` with the assigns unchanged,
+  and `terminate/2` returns `:ok`.
 
   ## Design decisions
 
@@ -101,14 +103,6 @@ defmodule Wymcp.Server do
           :ok
         end
       end
-
-  ## Related Modules
-
-  See: `Wymcp.Session`
-
-  ## Tests
-
-  See: `Wymcp.ServerTest`
   """
 
   @callback init(client_info :: map(), assigns :: map()) ::

@@ -1,14 +1,6 @@
 defmodule Wymcp.HintTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for Wymcp.Hint struct.
-
-  The Hint struct enforces a consistent shape for follow-up action suggestions
-  in MCP tool responses. It validates required fields at construction time
-  and serializes to a flat JSON map.
-  """
-
   alias Wymcp.Hint
 
   describe "new/1" do

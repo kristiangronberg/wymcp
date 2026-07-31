@@ -39,6 +39,13 @@ surface it just misused. The pointer string is a legal call, never a
 prose hint; its format lives in one internal builder (`Wymcp.Tool`).
 _Avoid_: help link, help hint
 
+**reserved name**
+`Wymcp.Help.uses_reserved_name?/1`
+
+**session opts**
+`Wymcp.Testing.build_session_opts/1`
+_Avoid_: session-init map
+
 ## Grandfathered (pending define)
 
 Swept from the existing code and docs on 2026-07-05 (glossary bootstrap).
@@ -147,7 +154,7 @@ end collect the synonym sets that span entries.
 - **Noop auth** — the default pass-through Auth implementation. (`Wymcp.Auth.Noop`)
 - **origin check** — allowlist rejection of requests by `Origin` header; DNS-rebinding protection. (`Wymcp.Plugs.OriginCheck`)
 - **envelope validation** — validating every inbound message against the MCP schema's `JSONRPCMessage` definition (priv/schema.json, JSON Schema 2020-12, compiled at build time). (`Wymcp.Plugs.Validate`, `Wymcp.JsonRpc`)
-- **validation layers** — four distinct stages share the word "validate": boot-time action-schema validation (`validate_actions!`), envelope validation (`Plugs.Validate`), tools/call argument validation (`validate_arguments` / `validate_schema`), and in-dispatch checks (required, required_one_of, unknown params). Flagged as overload debt. (`Wymcp.Tool`, `Wymcp.Plugs.Validate`, `Wymcp.Methods.ToolsCall`)
+- **validation layers** — four distinct stages share the word "validate": action-schema validation at boot and at runtime registration (`validate_actions!`), envelope validation (`Plugs.Validate`), tools/call argument validation (`validate_arguments` / `validate_schema`), and in-dispatch checks (required, required_one_of, unknown params). Flagged as overload debt. (`Wymcp.Tool`, `Wymcp.Plugs.Validate`, `Wymcp.Methods.ToolsCall`)
 
 ### Adopted but unimplemented spec surface
 

@@ -4,7 +4,10 @@ defmodule Wymcp.Hint do
 
   Every hint represents a concrete next action the LLM can take. The struct
   enforces required fields at construction time and validates that `tool` and
-  `action` are strings (matching the JSON wire format).
+  `action` are strings (matching the JSON wire format). A hint serializes to
+  a flat JSON map via the module's `JSON.Encoder` implementation, and is
+  consumed by `Wymcp.Tool`, which injects hints returned from the
+  `c:Wymcp.Tool.hints/2` callback into tool responses.
 
   ## Fields
 
@@ -16,14 +19,6 @@ defmodule Wymcp.Hint do
   ## Usage
 
       Hint.new(tool: "tasks", action: "get", description: "View the task", example: %{data: %{id: id}})
-
-  ## Related Modules
-
-  See: `Wymcp.Tool` — consumes hints via the `hints/2` callback
-
-  ## Tests
-
-  See: `test/wymcp/hint_test.exs`
   """
 
   @enforce_keys [:tool, :action, :description]

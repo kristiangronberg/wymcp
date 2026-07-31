@@ -7,9 +7,10 @@ defmodule Wymcp.Plugs.Session do
 
     * **Session header present and registered** — assigns
       `:wymcp_session_pid` and `:wymcp_session_id`, calls `Session.touch/1`,
-      and validates the `MCP-Protocol-Version` header against the
-      version pinned at `initialize` time. Downstream methods read
-      tools from the session pid, not from compile-time options.
+      and validates the `MCP-Protocol-Version` header (see
+      `Wymcp.ProtocolVersion`) against the version pinned at `initialize`
+      time — on response messages as well as requests. Downstream methods
+      read tools from the session pid, not from compile-time options.
 
     * **Session header missing on a non-exempt method** — rejects
       with HTTP 400 + JSON-RPC -32600 (`invalid_request`). Per the
@@ -86,15 +87,6 @@ defmodule Wymcp.Plugs.Session do
       404 with empty body. A JSON-RPC response carries an `id` of a
       server-initiated request the server already sent; replying to
       it with a JSON-RPC error would itself be a protocol violation.
-
-  ## Related Modules
-
-  See: `Wymcp.Session`, `Wymcp.JsonRpc`, `Wymcp.ProtocolVersion`,
-  `Wymcp.Plugs.Pipeline`.
-
-  ## Tests
-
-  See: `test/wymcp/plugs/session_test.exs`.
   """
 
   import Plug.Conn

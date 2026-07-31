@@ -1,7 +1,7 @@
 defmodule Wymcp.HelpTest do
   use ExUnit.Case, async: true
 
-  alias Wymcp.{Context, Help, Session}
+  alias Wymcp.{Context, Help, Session, Testing}
 
   defmodule WidgetTool do
     @moduledoc false
@@ -52,15 +52,30 @@ defmodule Wymcp.HelpTest do
     def action_context(_action, _ctx), do: nil
   end
 
+  defmodule BadContextTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "bad_context"
+
+    @impl true
+    def description, do: "action_context returns a non-map"
+
+    @impl true
+    def actions do
+      %{ping: %{description: "Returns ok", properties: %{}}}
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:ping, _data, _ctx), do: {:ok, %{}}
+
+    @impl Wymcp.Tool
+    def action_context(_action, _ctx), do: "not a map"
+  end
+
   defp build_ctx(tools) do
-    {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: tools,
-        auth: nil
-      })
+    {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts(tools: tools))
 
     %Context{session_pid: pid, session_id: session_id, request_id: 1, assigns: %{}}
   end
@@ -75,6 +90,16 @@ defmodule Wymcp.HelpTest do
       assert is_binary(definition["description"])
       assert definition["inputSchema"]["additionalProperties"] == false
       assert Map.keys(definition["inputSchema"]["properties"]) == ["action", "tool"]
+    end
+  end
+
+  describe "uses_reserved_name?/1" do
+    test "true for a module whose name/0 is \"help\"" do
+      assert Help.uses_reserved_name?(Help)
+    end
+
+    test "false for any other tool" do
+      refute Help.uses_reserved_name?(WidgetTool)
     end
   end
 
@@ -176,6 +201,14 @@ defmodule Wymcp.HelpTest do
       refute Map.has_key?(response, "defaults")
       refute Map.has_key?(response, "notes")
     end
+
+    test "a bad action_context return raises instead of being dropped" do
+      ctx = build_ctx([BadContextTool, Help])
+
+      assert_raise CaseClauseError, fn ->
+        Help.run(ctx, %{"tool" => "bad_context", "action" => "ping"})
+      end
+    end
   end
 
   describe "run/2 — telemetry" do
@@ -221,6 +254,7 @@ defmodule Wymcp.HelpTest do
       assert payload["error"] == "unknown_tool"
       assert payload["valid_tools"] == ["help", "widgets"]
       assert payload["message"] =~ "Unknown tool 'nope'"
+      assert payload["help"] == "help {}"
     end
 
     test "action without tool errors naming the valid tools" do
@@ -231,6 +265,7 @@ defmodule Wymcp.HelpTest do
 
       assert payload["error"] == "missing_tool"
       assert payload["valid_tools"] == ["help", "widgets"]
+      assert payload["help"] == "help {}"
     end
 
     test "unknown action errors naming that tool's valid actions" do

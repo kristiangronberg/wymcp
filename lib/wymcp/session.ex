@@ -67,14 +67,6 @@ defmodule Wymcp.Session do
           after 30 min (configurable).
       end note
   ```
-
-  ## Related Modules
-
-  See: `Wymcp.Context`
-
-  ## Tests
-
-  See: `Wymcp.SessionTest`
   """
 
   use GenServer
@@ -617,10 +609,11 @@ defmodule Wymcp.Session do
   end
 
   # Runs in the caller's process so a bad module fails the registering code
-  # path, not the session. The name/0 call also forces the module load (BEAM
-  # loads lazily) before validate_actions!/1 reads actions/0.
+  # path, not the session. The predicate's name/0 call also forces the
+  # module load (BEAM loads lazily) before validate_actions!/1 reads
+  # actions/0.
   defp validate_registerable!(tool_module) do
-    if tool_module.name() == Wymcp.Help.name() do
+    if Wymcp.Help.uses_reserved_name?(tool_module) do
       raise ArgumentError,
             "Tool #{inspect(tool_module)} uses the reserved name #{inspect(Wymcp.Help.name())}. " <>
               "The help tool is provided by Wymcp and cannot be replaced at runtime."

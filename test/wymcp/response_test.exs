@@ -1,16 +1,6 @@
 defmodule Wymcp.ResponseTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.Response module.
-
-  Response is the lowest-level output module — it takes a Plug.Conn and a map,
-  encodes the map as JSON, and sends it. It preserves any previously-set status
-  code (e.g., 400 for validation errors) rather than blindly overwriting with 200.
-  The connection is halted after sending to prevent downstream plugs from
-  double-sending.
-  """
-
   import Plug.Test
   import Plug.Conn
 

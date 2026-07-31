@@ -1,29 +1,11 @@
 defmodule Wymcp.Plugs.AuthTest do
-  use ExUnit.Case, async: false
-
   @moduledoc """
-  Tests for the `Wymcp.Plugs.Auth` plug.
-
-  The plug owns three responsibilities: dispatching to the configured
-  `c:Wymcp.Auth.authenticate/1` callback, returning a spec-compliant
-  401 with `WWW-Authenticate: Bearer` on rejection, and emitting
-  telemetry + structured logs so consumers can attribute auth-failure
-  spikes.
-
-  The previous plug logged nothing on the expected rejection branch.
-  Tests here pin the structured-logging contract: a `[:wymcp, :auth,
-  :reject]` event on `{:error, _}` and a `[:wymcp, :auth, :error]`
-  event on rescue. Failure of these tests means the wire still works
-  but observability has regressed.
-
-  This module runs `async: false` because telemetry handler
-  attachments are global — concurrent modules attaching to the same
-  event would see each other's emissions.
-
-  The 401 challenge is bare "Bearer" by default and gains RFC 6750
-  auth-params (resource_metadata pointer, scope hint) when the consumer sets
-  the router's :www_authenticate option.
+  Runs `async: false` because telemetry handler attachments are global —
+  concurrent modules attaching to the same event would see each other's
+  emissions.
   """
+
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
   import Plug.Test

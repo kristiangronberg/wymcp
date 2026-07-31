@@ -1,52 +1,12 @@
 defmodule Wymcp.Plugs.SessionTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the session lookup plug.
-
-  The session plug extracts the Mcp-Session-Id header, looks up the
-  session GenServer, resets the idle timer, and stores the pid in
-  conn.assigns. Initialize and ping requests are exempt — they don't
-  require a session header.
-
-  Non-exempt requests without a valid session header are rejected with
-  HTTP 400 (JSON-RPC -32600 invalid_request). This follows the MCP spec:
-  "Servers that require a session ID SHOULD respond to requests without
-  an MCP-Session-Id header with HTTP 400 Bad Request."
-
-  Non-exempt messages *with* a session header that the registry does
-  not recognise are rejected with HTTP 404. This follows the MCP
-  2025-11-25 spec, Streamable HTTP / Session Management clauses 3 and
-  4: a server MAY terminate a session at any time and MUST then
-  respond to requests carrying that ID with 404; the client MUST start
-  a new session by issuing a fresh InitializeRequest. A
-  server-restart-wiped registry is, from the spec's perspective, an
-  instance of clause 3 — there is no "I never saw this ID" branch
-  distinct from "I terminated this ID".
-
-  The 404 body branches on JSON-RPC message kind, since JSON-RPC 2.0
-  forbids responding to notifications and to responses:
-
-    * Request (`id` present, message-kind not `:response`) — body is
-      `{"jsonrpc":"2.0","id":<id>,"error":{"code":-32001,"message":
-      "Session terminated"}}`, matching the TypeScript SDK exactly
-      (no `data` field).
-    * Notification (no `id`) — HTTP 404 with empty body.
-    * Response message (`wymcp_message_type == :response`) — HTTP 404
-      with empty body.
-
-  After session lookup, the plug validates the MCP-Protocol-Version
-  header against the version negotiated during initialize. Missing or
-  mismatched headers are rejected with 400. This applies to both
-  request messages (via resolve_session) and response messages (via
-  resolve_session_for_response).
-  """
-
   import Plug.Test
   import Plug.Conn
 
   alias Wymcp.Plugs.Session, as: SessionPlug
   alias Wymcp.Session
+  alias Wymcp.Testing
 
   test "passes through initialize requests without session header" do
     conn =
@@ -68,13 +28,7 @@ defmodule Wymcp.Plugs.SessionTest do
 
   test "assigns session pid when valid session ID is present" do
     {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
 
@@ -215,13 +169,7 @@ defmodule Wymcp.Plugs.SessionTest do
        """
   test "allows tools/list when session is still initializing" do
     {:ok, _pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts())
 
     conn =
       conn(:post, "/")
@@ -235,13 +183,7 @@ defmodule Wymcp.Plugs.SessionTest do
 
   test "allows notifications/initialized when session is still initializing" do
     {:ok, _pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts())
 
     conn =
       conn(:post, "/")
@@ -262,13 +204,7 @@ defmodule Wymcp.Plugs.SessionTest do
        """
   test "resolves session for response messages" do
     {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
 
@@ -326,13 +262,7 @@ defmodule Wymcp.Plugs.SessionTest do
 
   test "allows tools/list when session is ready" do
     {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
 
@@ -466,13 +396,7 @@ defmodule Wymcp.Plugs.SessionTest do
 
   defp start_ready_session do
     {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+      Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
     {:ok, pid, session_id}

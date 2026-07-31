@@ -1,35 +1,15 @@
 defmodule Wymcp.Methods.CancelledTest do
   use ExUnit.Case, async: true
 
-  @moduledoc """
-  Tests for the Wymcp.Methods.Cancelled handler.
-
-  Cancelled handles `notifications/cancelled` — a client notification that
-  a previously-issued request should be abandoned. The handler calls
-  `Session.complete_request/2` to clean up the pending request tracker.
-  It always returns an empty JSON response (notifications don't expect a
-  meaningful reply).
-
-  `notifications/cancelled` is not session-exempt, so `Plugs.Session`
-  ensures the session pid is always assigned by the time this handler
-  runs.
-  """
-
   import Plug.Test
   import Plug.Conn
 
   alias Wymcp.Methods.Cancelled
   alias Wymcp.Session
+  alias Wymcp.Testing
 
   defp start_session do
-    {:ok, pid, session_id} =
-      Session.start_session(%{
-        client_capabilities: %{},
-        client_info: %{"name" => "test", "version" => "1.0"},
-        protocol_version: "2025-11-25",
-        tools: [],
-        auth: nil
-      })
+    {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts())
 
     Session.mark_ready(pid)
     {pid, session_id}

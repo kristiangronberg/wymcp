@@ -66,14 +66,6 @@ defmodule Wymcp.Context do
       S-->>C: {:ok, result}
       C-->>T: {:ok, result}
   ```
-
-  ## Related Modules
-
-  See: `Wymcp.Tool`, `Wymcp.Session`
-
-  ## Tests
-
-  See: `Wymcp.ContextTest`
   """
 
   defstruct [:session_pid, :session_id, :request_id, :meta, assigns: %{}]

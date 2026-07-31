@@ -1,13 +1,11 @@
 defmodule Wymcp.Transport.StreamTest do
-  use ExUnit.Case, async: true
-
   @moduledoc """
-  Tests for the SSE stream module.
-
-  Stream wraps Plug.Conn chunked responses with SSE formatting. Since
-  we can't fully test chunked responses with Plug.Test (no adapter),
-  we test the open/1 function for header setup.
+  Chunked responses can't be fully exercised with Plug.Test (no adapter
+  support for reading chunks back), so these tests cover `open/1`'s
+  header setup only.
   """
+
+  use ExUnit.Case, async: true
 
   import Plug.Test
 

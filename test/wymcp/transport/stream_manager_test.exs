@@ -1,36 +1,26 @@
 defmodule Wymcp.Transport.StreamManagerTest do
-  use ExUnit.Case, async: true
-
   @moduledoc """
-  Tests for the StreamManager GenServer.
-
-  StreamManager owns a chunked Plug.Conn for SSE streaming. Plug.Test's
-  adapter accumulates chunk writes in adapter state rather than sending
-  them to a client, so a StreamManager can be started on a conn opened
-  with `Wymcp.Transport.Stream.open/1` — but nothing reads the bytes
-  back. These tests therefore cover the GenServer lifecycle, monitoring,
-  and message protocol rather than actual HTTP output. The event counter
-  has no public accessor; the resumption tests read it with
-  `:sys.get_state/1`. Sessions are started through the `start_session/0`
-  helper, which generates a unique id per call — session ids are keys in
-  the process-global session Registry, and this module runs
-  `async: true`.
-
-  The StreamManager is started conn-lessly with a session pid (it registers
-  with the session in init/1) and receives the chunked conn afterwards via
-  attach/2, which sends the priming event and starts keepalives — mirroring
-  the router's two-phase GET flow. It monitors the session: if the session
-  dies, the stream shuts down. The keepalive timer fires periodically but
-  is tested with short intervals to avoid slow tests.
-
-  Real SSE output is covered by integration tests using an HTTP client
-  against a running server (out of scope for this unit test module).
+  Plug.Test's adapter accumulates chunk writes in adapter state rather
+  than sending them to a client, so a StreamManager can be started on a
+  conn opened with `Wymcp.Transport.Stream.open/1` — but nothing reads
+  the bytes back. These tests therefore cover the GenServer lifecycle,
+  monitoring, and message protocol rather than actual HTTP output; real
+  SSE output is integration-tested against a running server, out of
+  scope here. The event counter has no public accessor; the resumption
+  tests read it with `:sys.get_state/1`. Sessions are started through
+  the `start_session/0` helper, which generates a unique id per call —
+  session ids are keys in the process-global session Registry, and this
+  module runs `async: true`. Keepalive timers are tested with short
+  intervals to avoid slow tests.
   """
+
+  use ExUnit.Case, async: true
 
   import Plug.Test
   import ExUnit.CaptureLog
 
   alias Wymcp.Session
+  alias Wymcp.Testing
   alias Wymcp.Transport.SSE
   alias Wymcp.Transport.Stream
   alias Wymcp.Transport.StreamManager
@@ -273,17 +263,7 @@ defmodule Wymcp.Transport.StreamManagerTest do
   defp start_session do
     session_id = "stream-manager-test-#{System.unique_integer([:positive])}"
 
-    {:ok, pid} =
-      Session.start_link(
-        {session_id,
-         %{
-           client_capabilities: %{},
-           client_info: %{"name" => "test", "version" => "1.0"},
-           protocol_version: "2025-11-25",
-           tools: [],
-           auth: nil
-         }}
-      )
+    {:ok, pid} = Session.start_link({session_id, Testing.build_session_opts()})
 
     pid
   end

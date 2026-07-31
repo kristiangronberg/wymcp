@@ -18,7 +18,8 @@ defmodule Wymcp.Plugs.Auth do
 
   ## Observability
 
-  The plug emits two telemetry events alongside the wire response:
+  The plug emits two telemetry events (see `Wymcp.Telemetry`) alongside
+  the wire response:
 
   * `[:wymcp, :auth, :reject]` — the auth module returned `{:error,
     reason}`. Metadata includes `auth_module`, `reason`, `request_id`,
@@ -30,10 +31,6 @@ defmodule Wymcp.Plugs.Auth do
   Both branches also emit a structured `Logger` line with the same
   metadata so operators without a telemetry handler still get
   attribution.
-
-  ## Related Modules
-
-  See: `Wymcp.Auth`, `Wymcp.Auth.Noop`, `Wymcp.Telemetry`
   """
 
   require Logger
