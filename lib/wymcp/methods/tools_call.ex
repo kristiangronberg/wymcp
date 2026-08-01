@@ -62,17 +62,24 @@ defmodule Wymcp.Methods.ToolsCall do
       })
 
       try do
-        {content, is_error} =
+        {content, is_error, error_kind} =
           case tool.run(ctx, arguments) do
             {:ok, content} ->
-              {content, false}
+              {content, false, nil}
 
             {:ok, content, assigns_updates} when is_map(assigns_updates) ->
               persist_assigns(conn, assigns_updates)
-              {content, false}
+              {content, false, nil}
 
             {:error, message} ->
-              {[%{"type" => "text", "text" => message}], true}
+              {Context.text(message), true, :tool}
+
+            # The kind vocabulary is deliberately closed here: an
+            # off-contract third element (e.g. run_action's hint-context
+            # map escaping a hand-written run/2) must crash into the
+            # rescue below, not leak into telemetry.
+            {:error, message, kind} when kind in [:dispatch, :tool] ->
+              {Context.text(message), true, kind}
           end
 
         result = send_tool_result(conn, request, tool, content, is_error)
@@ -82,7 +89,8 @@ defmodule Wymcp.Methods.ToolsCall do
           tool_name: name,
           action: action,
           session_id: ctx.session_id,
-          is_error: is_error
+          is_error: is_error,
+          error_kind: error_kind
         })
 
         result

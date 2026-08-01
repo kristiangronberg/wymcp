@@ -92,6 +92,82 @@ defmodule Wymcp.Methods.ToolsCallTest do
     def run_action(:fail, _data, _ctx), do: {:error, "nope"}
   end
 
+  defmodule GateRejectingTool do
+    @moduledoc false
+    @behaviour Wymcp.Tool
+
+    @impl true
+    def name, do: "gate_rejecting"
+
+    @impl true
+    def description, do: "Hand-rolled run/2 that classifies its own gate rejection"
+
+    @impl true
+    def actions, do: %{}
+
+    @impl true
+    def run_action(_action, _data, _ctx), do: {:error, "unreachable"}
+
+    @impl true
+    def output_schema, do: nil
+
+    def input_schema, do: %{"type" => "object"}
+
+    # Hand-written run/2 exercising the documented contract: a tool may
+    # classify its own gate rejections with the three-element error form.
+    def run(_ctx, _arguments), do: {:error, "rejected by the tool's own gate", :dispatch}
+  end
+
+  defmodule ToolClassifyingItsOwnError do
+    @moduledoc false
+    @behaviour Wymcp.Tool
+
+    @impl true
+    def name, do: "self_classifying"
+
+    @impl true
+    def description, do: "Hand-rolled run/2 that classifies its own error :tool"
+
+    @impl true
+    def actions, do: %{}
+
+    @impl true
+    def run_action(_action, _data, _ctx), do: {:error, "unreachable"}
+
+    @impl true
+    def output_schema, do: nil
+
+    def input_schema, do: %{"type" => "object"}
+
+    # The redundant-but-documented form: the three-element error tuple with
+    # the classification the two-element form would have implied.
+    def run(_ctx, _arguments), do: {:error, "tool answered with its own :tool kind", :tool}
+  end
+
+  defmodule OffContractKindTool do
+    @moduledoc false
+    @behaviour Wymcp.Tool
+
+    @impl true
+    def name, do: "off_contract_kind"
+
+    @impl true
+    def description, do: "Hand-rolled run/2 returning an off-contract third element"
+
+    @impl true
+    def actions, do: %{}
+
+    @impl true
+    def run_action(_action, _data, _ctx), do: {:error, "unreachable"}
+
+    @impl true
+    def output_schema, do: nil
+
+    def input_schema, do: %{"type" => "object"}
+
+    def run(_ctx, _arguments), do: {:error, "bogus classification", :bogus}
+  end
+
   defp build_conn(method, params, tools \\ []) do
     body = %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}
 
@@ -414,6 +490,7 @@ defmodule Wymcp.Methods.ToolsCallTest do
         assert metadata.action == "echo"
         assert metadata.session_id == session_id
         assert metadata.is_error == false
+        assert metadata.error_kind == nil
       after
         :telemetry.detach(handler_id)
       end
@@ -445,6 +522,168 @@ defmodule Wymcp.Methods.ToolsCallTest do
         assert_received {:telemetry, ^ref, metadata}
         assert metadata.action == "fail"
         assert metadata.is_error == true
+        assert metadata.error_kind == :tool
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "stop event carries the error_kind a hand-rolled run/2 classifies itself" do
+      ref = make_ref()
+      handler_id = "tool-stop-kind-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :tool, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{"name" => "gate_rejecting", "arguments" => %{}},
+            [GateRejectingTool]
+          )
+
+        result = ToolsCall.run(conn, [GateRejectingTool])
+        body = JSON.decode!(result.resp_body)
+
+        assert body["result"]["isError"] == true
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.is_error == true
+        assert metadata.error_kind == :dispatch
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "stop event carries :tool when a hand-rolled run/2 classifies its own error" do
+      ref = make_ref()
+      handler_id = "tool-stop-self-kind-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :tool, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{"name" => "self_classifying", "arguments" => %{}},
+            [ToolClassifyingItsOwnError]
+          )
+
+        result = ToolsCall.run(conn, [ToolClassifyingItsOwnError])
+        body = JSON.decode!(result.resp_body)
+
+        assert body["result"]["isError"] == true
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.is_error == true
+        assert metadata.error_kind == :tool
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    @tag :capture_log
+    @tag doc: """
+         Characterizes the closed-vocabulary guard on error_kind (topic
+         2026-07-31-telemetry-call-outcomes): an off-contract third element
+         must crash into the rescue clause and surface as tool_raised, never
+         reach telemetry as a classified :stop. This test passes both before
+         and after the emitter widening — the pre-change case has no 3-tuple
+         clause at all, so the value already falls through the same way. It
+         exists to catch a *future* change: the guard widened to
+         is_atom(kind), or a new kind value added to the contract without
+         updating the `when` clause.
+         """
+    test "an off-contract error_kind crashes into the rescue instead of leaking into telemetry" do
+      ref = make_ref()
+      handler_id = "tool-stop-bogus-#{inspect(ref)}"
+
+      :telemetry.attach_many(
+        handler_id,
+        [[:wymcp, :tool, :stop], [:wymcp, :tool, :error]],
+        fn event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, event, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{"name" => "off_contract_kind", "arguments" => %{}},
+            [OffContractKindTool]
+          )
+
+        result = ToolsCall.run(conn, [OffContractKindTool])
+        body = JSON.decode!(result.resp_body)
+
+        assert body["result"]["isError"] == true
+
+        diagnostic = body["result"]["content"] |> hd() |> Map.get("text") |> JSON.decode!()
+        assert diagnostic["errorType"] == "tool_raised"
+        assert diagnostic["exception"] == "CaseClauseError"
+
+        assert_received {:telemetry, ^ref, [:wymcp, :tool, :error], _error_meta}
+        refute_received {:telemetry, ^ref, [:wymcp, :tool, :stop], _stop_meta}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    @tag doc: """
+         Pins why error_kind exists (topic
+         2026-07-31-telemetry-call-outcomes): since 0.8.0 a dispatch-gate
+         rejection and a tool-returned error both record is_error: true,
+         so "which actions do callers get wrong" was inseparable from
+         "which actions fail". A failure here means the classification
+         died between Wymcp.Tool.dispatch/4 and the stop emitter — check
+         the gate branches' third tuple element first.
+         """
+    test "a generated tool's dispatch-gate rejection classifies error_kind :dispatch" do
+      ref = make_ref()
+      handler_id = "tool-stop-dispatch-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :tool, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn =
+          build_conn(
+            "tools/call",
+            %{"name" => "echo", "arguments" => %{"action" => "nope"}},
+            [EchoTool]
+          )
+
+        result = ToolsCall.run(conn, [EchoTool])
+        body = JSON.decode!(result.resp_body)
+
+        payload = body["result"]["content"] |> hd() |> Map.get("text") |> JSON.decode!()
+        assert payload["error"] == "unknown_action"
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.is_error == true
+        assert metadata.error_kind == :dispatch
       after
         :telemetry.detach(handler_id)
       end

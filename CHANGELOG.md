@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Wymcp.Transport.Stream.push_timeout/0` publishes the push call's
   timeout so callers can size their own `GenServer.call` timeouts above
   it.
+- `[:wymcp, :tool, :stop]` metadata gains
+  `error_kind: :dispatch | :tool | nil` — `:dispatch` when a gate
+  rejected the call before the action handler ran (wymcp's dispatch gate,
+  or a hand-written `run/2`'s own gate), `:tool` when the tool ran and
+  answered with an error, `nil` exactly when `is_error` is `false`. Telemetry metadata is a map, so a handler that
+  does not read the key is unaffected. The key is `:stop`-only.
+  See `Wymcp.Telemetry`.
 
 ### Changed
 
@@ -42,12 +49,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the 5 s push timeout) are new; `{:error, :no_stream}` now means exactly
   "this session has no stream" — the registered-but-not-attached case
   died with the attach phase; `{:error, :disconnected}` is unchanged.
+- **BREAKING:** `run/2` return contract: five paths that returned
+  `{:error, message}` now return `{:error, message, :dispatch}` — the four
+  `Wymcp.Tool.dispatch/4` gate branches (`unknown_action`,
+  `missing_required_fields`, `missing_required_group`, `unknown_params`)
+  and the generated `run/2`'s missing-`"action"` fallback. Code that
+  matches the two-element error shape exactly against a dispatch-gate
+  rejection or that fallback no longer matches it: match with `case`/
+  `with`, or add a three-element clause. Response bodies are unchanged —
+  the JSON payloads are byte-identical and the wire result still carries
+  `isError: true`; only the tuple's width changed. `{:error, message}`
+  remains valid everywhere else and classifies `:tool`, and
+  `{:error, message, :dispatch | :tool}` is now documented contract, so a
+  hand-written `run/2` can classify its own gate rejections. See
+  `Wymcp.Tool`.
 - `Wymcp.Session.push/2`, `register_tool/2`, `unregister_tool/2`, and
   `register_stream/2` now call with a timeout above the push timeout
   instead of the 5 000 ms default, and `await_client_response/4` sizes its
   call above both its own `timeout` and the push timeout. At equal
   timeouts a wedged stream exits the caller with `:timeout` before the
   push's own `{:error, :timeout}` can be returned.
+- `[:wymcp, :help, :called]` now emits after the answer is resolved, and
+  its metadata gains `is_error: boolean()` — a failed probe (unknown
+  tool, unknown action, action without tool) is no longer
+  indistinguishable from an answered one. Accepted semantic change: a
+  raise inside help now drops the help event; `[:wymcp, :tool, :error]`
+  still records the call.
 
 ### Fixed
 

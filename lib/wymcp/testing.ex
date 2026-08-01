@@ -9,8 +9,9 @@ defmodule Wymcp.Testing do
      `Wymcp.Session.init/1` requires, with a test default per key.
 
   2. **Direct tool testing** — `build_context/1` plus the `unwrap_*`
-     extractors: assert on `{:ok, content}` / `{:error, message}` return
-     values from `tool.run/2`, unit-testing a tool module in isolation.
+     extractors: assert on `run/2`'s tagged return tuples (the return
+     contract, including the classified error form, lives in
+     `Wymcp.Tool`), unit-testing a tool module in isolation.
 
   3. **HTTP response testing** — the `build_*_request` builders and
      `*_response` extractors: build `tools/call` bodies and pull content

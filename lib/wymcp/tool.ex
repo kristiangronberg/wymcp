@@ -103,9 +103,27 @@ defmodule Wymcp.Tool do
 
   `use Wymcp.Tool` also generates `run/2` — the framework's entry point to
   the tool. It takes a `Wymcp.Context.t()` and the raw `arguments` map and
-  returns `{:ok, content}` or `{:error, String.t()}`; it never touches the
-  HTTP layer. `Wymcp.Methods.ToolsCall` builds the JSON-RPC response from
-  the returned tuple (and additionally accepts `{:ok, content,
+  never touches the HTTP layer. It returns:
+
+  - `{:ok, content}` — success
+  - `{:error, message}` — an error the tool answered with; classified
+    `:tool` in telemetry
+  - `{:error, message, :dispatch | :tool}` — an error carrying its own
+    classification: `:dispatch` means a gate rejected the call before the
+    action handler ran (the generated `run/2` returns this for its own
+    dispatch-gate rejections), `:tool` means the tool ran and answered
+    with an error
+
+  The classification surfaces as the `error_kind` metadata key on
+  `[:wymcp, :tool, :stop]` — see `Wymcp.Telemetry`. A hand-written
+  `run/2` may use the three-element error form to classify its own gate
+  rejections; the two-element form always classifies `:tool`. This error
+  tuple is not `run_action/3`'s `{:error, reason, hint_context}` — there
+  the third element is a hint-context map consumed inside dispatch, never
+  a classification atom.
+
+  `Wymcp.Methods.ToolsCall` builds the JSON-RPC response from the
+  returned tuple (and additionally accepts `{:ok, content,
   assigns_updates}` from hand-written `run/2` implementations — see the
   assigns section of `Wymcp.Session`).
 
@@ -258,7 +276,7 @@ defmodule Wymcp.Tool do
       end
 
       def run(_ctx, _params) do
-        {:error, "Missing required 'action' parameter"}
+        {:error, "Missing required 'action' parameter", :dispatch}
       end
 
       def definition do
@@ -556,7 +574,11 @@ defmodule Wymcp.Tool do
       handle_result(module, action, ctx, module.run_action(action, merged, ctx))
     else
       {:error, :unknown_action} ->
-        unknown_action_error(module, action_str, actions)
+        # unknown_action_error/3 stays two-element: Wymcp.Help returns it
+        # as its own answer (a help answer, classified :tool); the
+        # :dispatch classification belongs to this gate alone.
+        {:error, message} = unknown_action_error(module, action_str, actions)
+        {:error, message, :dispatch}
 
       {:error, {:missing_required, missing, action_str, schema}} ->
         {:error,
@@ -567,7 +589,7 @@ defmodule Wymcp.Tool do
            action: action_str,
            input_schema: schema_summary(schema),
            help: help_pointer(module, action_str)
-         })}
+         }), :dispatch}
 
       {:error, {:missing_required_groups, groups, action_str, schema}} ->
         {:error,
@@ -580,7 +602,7 @@ defmodule Wymcp.Tool do
            action: action_str,
            input_schema: schema_summary(schema),
            help: help_pointer(module, action_str)
-         })}
+         }), :dispatch}
 
       {:error, {:unknown_params, unknown, action_str, schema}} ->
         {:error,
@@ -593,7 +615,7 @@ defmodule Wymcp.Tool do
            action: action_str,
            input_schema: schema_summary(schema),
            help: help_pointer(module, action_str)
-         })}
+         }), :dispatch}
     end
   end
 

@@ -329,7 +329,7 @@ defmodule Wymcp.ToolTest do
   defp error?({:error, _}), do: true
   defp error?({:ok, [%{"type" => "text", "text" => _}]}), do: false
 
-  defp decode_error({:error, message}), do: JSON.decode!(message)
+  defp decode_error({:error, message, :dispatch}), do: JSON.decode!(message)
 
   describe "definition/0" do
     test "returns MCP tool definition with name, description, and input schema" do
@@ -404,7 +404,7 @@ defmodule Wymcp.ToolTest do
     end
 
     test "unknown action returns a structured error naming the valid actions" do
-      {:error, message} = WidgetTool.run(build_ctx(), %{"action" => "nope"})
+      {:error, message, :dispatch} = WidgetTool.run(build_ctx(), %{"action" => "nope"})
       content = JSON.decode!(message)
 
       assert content["error"] == "unknown_action"
@@ -416,9 +416,9 @@ defmodule Wymcp.ToolTest do
       assert content["help"] == ~s|help {tool: "widgets"}|
     end
 
-    test "returns {:error, _} when action is missing entirely" do
+    test "returns {:error, _, :dispatch} when action is missing entirely" do
       result = WidgetTool.run(build_ctx(), %{})
-      assert {:error, _} = result
+      assert {:error, _, :dispatch} = result
     end
 
     test "schema without :required and :defaults dispatches with empty defaults" do

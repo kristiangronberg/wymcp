@@ -212,7 +212,7 @@ defmodule Wymcp.HelpTest do
   end
 
   describe "run/2 — telemetry" do
-    test "emits [:wymcp, :help, :called] with target and level" do
+    test "emits [:wymcp, :help, :called] with target, level, and outcome" do
       ref = make_ref()
       handler_id = "help-called-#{inspect(ref)}"
 
@@ -235,9 +235,84 @@ defmodule Wymcp.HelpTest do
         assert metadata.action == "create"
         assert metadata.level == :action
         assert metadata.session_id == ctx.session_id
+        assert metadata.is_error == false
 
         {:ok, _content} = Help.run(ctx, %{})
-        assert_received {:telemetry, ^ref, %{level: :index, tool: nil, action: nil}}
+
+        assert_received {:telemetry, ^ref,
+                         %{level: :index, tool: nil, action: nil, is_error: false}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "a failed probe emits is_error: true with the raw target echo" do
+      ref = make_ref()
+      handler_id = "help-called-error-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :help, :called],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        ctx = build_ctx([WidgetTool, Help])
+
+        {:error, _message} = Help.run(ctx, %{"tool" => "nope", "action" => "get"})
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.tool == "nope"
+        assert metadata.action == "get"
+        assert metadata.level == :action
+        assert metadata.is_error == true
+
+        # The unknown-action answer is the one error path routed through the
+        # shared Wymcp.Tool.unknown_action_error/3 — pinned separately so a
+        # future widening of that helper's tuple cannot silently flip this
+        # flag back to false.
+        {:error, _message} = Help.run(ctx, %{"tool" => "widgets", "action" => "nope"})
+
+        assert_received {:telemetry, ^ref, unknown_action_metadata}
+        assert unknown_action_metadata.is_error == true
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    @tag doc: """
+         Pins the accepted semantic of post-resolution emission (topic
+         2026-07-31-telemetry-call-outcomes): a raise inside help drops
+         the help event instead of recording a call with an unknowable
+         outcome — the generic [:wymcp, :tool, :error] event still
+         records the call. If this fails because an event WAS received,
+         the emission has moved back before answer/4 and failed probes
+         are misreported again.
+         """
+    test "a raise inside help drops the help event" do
+      ref = make_ref()
+      handler_id = "help-called-raise-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :help, :called],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        ctx = build_ctx([BadContextTool, Help])
+
+        assert_raise CaseClauseError, fn ->
+          Help.run(ctx, %{"tool" => "bad_context", "action" => "ping"})
+        end
+
+        refute_received {:telemetry, ^ref, _metadata}
       after
         :telemetry.detach(handler_id)
       end

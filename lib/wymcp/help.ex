@@ -28,7 +28,8 @@ defmodule Wymcp.Help do
   `Wymcp.Tool.build_definition/1` every generated tool uses, so a
   definition key added there reaches help without hand-sync.
 
-  Every call emits `[:wymcp, :help, :called]` — see `Wymcp.Telemetry`.
+  Every answered call emits `[:wymcp, :help, :called]` after its answer
+  is resolved — see `Wymcp.Telemetry`.
 
   ```mermaid
   flowchart TD
@@ -109,14 +110,17 @@ defmodule Wymcp.Help do
     tool_name = params["tool"]
     action_name = params["action"]
 
+    result = answer(Session.get_tools(ctx.session_pid), tool_name, action_name, ctx)
+
     Telemetry.emit(:help, :called, %{}, %{
       tool: tool_name,
       action: action_name,
       level: level(tool_name, action_name),
-      session_id: ctx.session_id
+      session_id: ctx.session_id,
+      is_error: match?({:error, _}, result)
     })
 
-    answer(Session.get_tools(ctx.session_pid), tool_name, action_name, ctx)
+    result
   end
 
   defp level(nil, nil), do: :index
