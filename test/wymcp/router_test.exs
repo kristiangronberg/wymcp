@@ -511,10 +511,11 @@ defmodule Wymcp.RouterTest do
     @moduledoc false
     use GenServer
 
-    # Alive at Session.lookup/1, gone by the time StreamManager's init/1
-    # registers — the B6/B7 race, made deterministic. Answers the router's
-    # touch cast, then refuses the register_stream call by stopping without
-    # replying, which exits the caller; StreamManager turns that into :ignore.
+    # Alive at Session.lookup/1, gone by the time the stream registers —
+    # the lookup→registration race, made deterministic. Answers the
+    # router's touch cast, then refuses the register_stream call by
+    # stopping without replying, which exits the caller;
+    # Transport.Stream.serve/3 turns that into {:error, :session_gone}.
     def start(session_id) do
       GenServer.start(__MODULE__, nil,
         name: {:via, Registry, {Wymcp.Session.Registry, session_id}}
@@ -985,14 +986,15 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-         The payoff of the two-phase start: a session that dies between the
-         router's lookup and the stream's registration answers the same 404
-         as an unknown session, before any bytes are committed. The stand-in
-         is started with GenServer.start/3, not start_link/3, so its exit
-         does not reach the test process, and it is asserted alive at lookup
-         time — a stand-in that died earlier would let Registry cleanup win,
-         routing the request through the already-tested lookup-miss branch
-         and passing for the wrong reason.
+         Registration precedes the 200 commit: a session that dies between
+         the router's lookup and the stream's registration answers the
+         same 404 as an unknown session, before any bytes are committed.
+         The stand-in is started with GenServer.start/3, not start_link/3,
+         so its exit does not reach the test process, and it is asserted
+         alive at lookup time — a stand-in that died earlier would let
+         Registry cleanup win, routing the request through the
+         already-tested lookup-miss branch and passing for the wrong
+         reason.
          """
     test "returns 404 when the session dies between lookup and stream registration" do
       session_id = "vanishing-#{System.unique_integer([:positive])}"
@@ -1031,11 +1033,11 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-         GET with a valid session must open an SSE stream — the response
-         should have status 200, content-type text/event-stream, and be in
-         chunked state. Since Plug.Test doesn't support real chunked
-         streaming, we run GET in a task and terminate the session to
-         unblock it, then verify the response.
+         GET with a valid session must open an SSE stream — status 200,
+         content-type text/event-stream, chunked state, and the priming
+         event in the body: the request process writes the chunks, so the
+         returned conn carries the accumulated bytes. The GET blocks for
+         the stream's lifetime; terminating the session unblocks it.
          """
     test "opens SSE stream for valid session" do
       session_id = initialize()
@@ -1057,7 +1059,7 @@ defmodule Wymcp.RouterTest do
       # Give the stream time to start
       Process.sleep(100)
 
-      # Terminate session — this kills the StreamManager via monitor
+      # Terminate session — the stream's session monitor ends the loop
       Wymcp.Session.terminate_session(session_id)
 
       assert_receive {:stream_done, result_conn}, 2000
@@ -1068,20 +1070,18 @@ defmodule Wymcp.RouterTest do
         Enum.find(result_conn.resp_headers, fn {k, _} -> k == "content-type" end)
 
       assert content_type =~ "text/event-stream"
+      assert result_conn.resp_body == "id: evt-1\ndata: \n\n"
 
       Task.await(task, 1000)
     end
 
     @tag doc: """
-         Two GETs on one session: the second replaces the first. Each
-         StreamManager is linked to its own request process (the GET route
-         start_links it), so the replaced request must survive the
-         replacement and finish its committed 200 — the session stops the
-         old manager with :normal precisely so that link does not kill it.
-         A regression to Process.exit(old, :kill) surfaces here as the
-         first task exiting :killed, not as a failed assertion; before
-         replacement existed at all the first task hung and Task.await/2
-         timed out instead.
+         Two GETs on one session: the second replaces the first. The
+         stream is the GET request process itself, so the replaced request
+         must survive replacement and finish its committed 200 — the
+         session asks the old stream to stop (Transport.Stream.replace/1)
+         precisely so nothing kills it. Before replacement existed the
+         first task hung and Task.await/2 timed out instead.
          """
     test "a second GET replaces the first stream and the replaced request finishes" do
       session_id = initialize()
@@ -1105,11 +1105,68 @@ defmodule Wymcp.RouterTest do
       first_conn = Task.await(first, 2000)
       assert first_conn.status == 200
       assert first_conn.state == :chunked
+      assert first_conn.resp_body == "id: evt-1\ndata: \n\n"
 
       # Unblock the surviving stream the way the sibling test does.
       Wymcp.Session.terminate_session(session_id)
       second_conn = Task.await(second, 2000)
       assert second_conn.status == 200
+    end
+
+    @tag doc: """
+         First router-level resumption coverage: the Last-Event-ID request
+         header sets the resumption point, observable as the priming
+         event's id in the response bytes — evt-7 resumes the counter at
+         8. Replay of missed events stays out of scope: the counter
+         resumes, nothing is re-sent.
+         """
+    test "resumes the event counter from a Last-Event-ID header" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      task =
+        Task.async(fn ->
+          conn(:get, "/")
+          |> put_req_header("mcp-session-id", session_id)
+          |> put_req_header("last-event-id", "evt-7")
+          |> Wymcp.Router.call(opts)
+        end)
+
+      Process.sleep(100)
+      Wymcp.Session.terminate_session(session_id)
+
+      result_conn = Task.await(task, 2000)
+      assert result_conn.resp_body == "id: evt-8\ndata: \n\n"
+    end
+
+    @tag doc: """
+         A malformed Last-Event-ID is raw client input, not an error: the
+         resumption point is discarded with a warning naming the raw
+         value, and the stream starts fresh at evt-1.
+         """
+    test "discards a malformed Last-Event-ID and starts fresh" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      log =
+        capture_log(fn ->
+          task =
+            Task.async(fn ->
+              conn(:get, "/")
+              |> put_req_header("mcp-session-id", session_id)
+              |> put_req_header("last-event-id", "evt-x")
+              |> Wymcp.Router.call(opts)
+            end)
+
+          Process.sleep(100)
+          Wymcp.Session.terminate_session(session_id)
+
+          result_conn = Task.await(task, 2000)
+          assert result_conn.resp_body == "id: evt-1\ndata: \n\n"
+        end)
+
+      assert log =~ "SSE resumption point discarded"
+      assert log =~ "evt-x"
     end
   end
 

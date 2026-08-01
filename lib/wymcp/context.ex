@@ -52,15 +52,15 @@ defmodule Wymcp.Context do
       participant T as Tool
       participant C as Context
       participant S as Session
-      participant SM as StreamManager
+      participant ST as Transport.Stream
       participant CL as Client
 
       T->>C: sample(ctx, prompt) or elicit(ctx, message, schema)
       C->>S: check_capability
       S-->>C: :ok
       C->>S: await_client_response(request_id, message, timeout)
-      S->>SM: push request via SSE
-      SM->>CL: SSE event
+      S->>ST: push request via SSE
+      ST->>CL: SSE event
       Note over S: Caller blocked (deferred reply)
       CL->>S: POST response (deliver_response)
       S-->>C: {:ok, result}
@@ -132,7 +132,7 @@ defmodule Wymcp.Context do
           "params" => params
         }
 
-        _ = Wymcp.Session.push_event(ctx.session_pid, notification)
+        _ = Wymcp.Session.push(ctx.session_pid, notification)
         :ok
     end
   end
@@ -179,7 +179,7 @@ defmodule Wymcp.Context do
         "params" => params
       }
 
-      _ = Wymcp.Session.push_event(pid, notification)
+      _ = Wymcp.Session.push(pid, notification)
       :ok
     else
       :ok

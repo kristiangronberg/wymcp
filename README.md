@@ -247,9 +247,8 @@ flowchart LR
     Tool --> Hint
     Context --> Session
     Router --> Session
-    Router --> StreamManager["Transport.StreamManager"]
-    StreamManager --> Stream["Transport.Stream"]
-    StreamManager --> Session
+    Router --> Stream["Transport.Stream"]
+    Stream --> Session
     Stream --> SSE["Transport.SSE"]
     Session --> Telemetry
     Session --> Server
@@ -376,22 +375,19 @@ auth rejection — flows through `send_json/2`, which preserves any
 previously-set HTTP status code and halts the connection so downstream plugs do
 not execute after a response is sent.
 
-[`Wymcp.Transport.StreamManager`](lib/wymcp/transport/stream_manager.ex) is the
-GenServer that owns the chunked SSE connection for a single MCP session. It is
-started (linked) by the GET request process in two phases: registration with
-the session happens before the 200 commits — so a session that died in the
-window gets a clean 404 — and the router then hands over the chunked conn via
-`attach/2`, which sends the priming event and starts the keepalive timer that
-prevents proxy idle-disconnects. It pushes server-initiated SSE events when
-the Session calls `push_event/2`. The StreamManager and Session monitor each
-other — if either dies, the other cleans up — and registering a new stream
-stops the previous one: only one active SSE stream per session.
-
-[`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) opens and manages the
-SSE response on a Plug connection. Wraps `Plug.Conn.send_chunked/2` with the
-SSE content-type headers and exposes helpers to push JSON-RPC messages as SSE
-events. Callers are responsible for scheduling keepalive comments via
-`push_keepalive/1` (e.g. every 15 seconds) to prevent proxy idle-disconnects.
+[`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) is the chunked SSE
+connection for one session, run as a receive loop by the GET request process
+that owns its socket. It registers with the session before the 200 commits —
+a session that died in that window gets a clean 404 — then sends the priming
+event and serves pushes and keepalives from the loop. The Session reaches it
+only through the module's public API (`push/3`, `replace/1`); every chunk
+write happens in the request process, the ownership rule real adapters
+(Bandit) enforce. The stream and Session monitor each other — if either
+process dies, the other cleans up — and because a request process can
+outlive the stream it ran, a stream that ends on a failed write clears its
+own registration (`Wymcp.Session.unregister_stream/2`) rather than waiting
+for a monitor that will not fire. A new GET replaces the old stream: only
+one active SSE stream per session.
 
 [`Wymcp.Transport.SSE`](lib/wymcp/transport/sse.ex) is pure SSE event encoding
 per the MCP Streamable HTTP transport specification. No process state, no side

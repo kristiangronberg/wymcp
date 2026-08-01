@@ -21,9 +21,6 @@ The params object of a `tools/call` request, carrying `action` + `data`.
 Optional on the wire: absent or JSON-null arguments read as the empty
 object.
 
-**attach**
-`Wymcp.Transport.StreamManager.attach/2`
-
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
 
@@ -54,12 +51,20 @@ timeout.
 The initial empty SSE event a new stream sends, giving the client an
 event ID for reconnection.
 
+**push**
+`Wymcp.Transport.Stream.push/2`
+_Avoid_: push event, push_event
+
 **reserved name**
 `Wymcp.Help.uses_reserved_name?/1`
 
 **session opts**
 `Wymcp.Testing.build_session_opts/1`
 _Avoid_: session-init map
+
+**stream**
+`Wymcp.Transport.Stream`
+_Avoid_: StreamManager, stream manager
 
 ## Grandfathered (pending define)
 
@@ -134,9 +139,6 @@ end collect the synonym sets that span entries.
 ### Transport & streaming
 
 - **Streamable HTTP** — the MCP transport wymcp implements: POST + optional GET-SSE + DELETE on one endpoint; the older split-endpoint HTTP+SSE transport is deliberately unsupported. (README, `Wymcp.Router`)
-- **stream** — the chunked SSE connection for one session; one active stream per session, a new GET replaces the old. (`Wymcp.Transport.StreamManager`)
-- **StreamManager** — the GenServer owning a session's SSE connection, a separate process from the Session. (`Wymcp.Transport.StreamManager`)
-- **push event** — sending a JSON-RPC message to the client over SSE; `Session.push_event` delegates to `StreamManager.push` (near-synonym pair). (`Wymcp.Session`, `Wymcp.Transport.StreamManager`)
 - **message classification** — tagging each inbound JSON-RPC message as `:request` / `:notification` / `:response` / `:unknown` (`conn.assigns.wymcp_message_type`) so responses bypass validation and reach deliver_response. (`Wymcp.Plugs.Classify`)
 
 ### Server-initiated requests
@@ -200,5 +202,4 @@ define sessions:
 - **run ×3** — `Methods.*.run`, generated `Tool.run/2`, `run_action/3`.
 - **negotiated version ≈ protocol version ≈ revision ≈ protocolVersion** — one concept, four spellings across resolver, state, prose, and wire.
 - **session assigns ≈ per-session state ≈ per-session assigns** — one concept in prose.
-- **push_event ≈ push** — Session vs StreamManager naming of the same send.
 - **camelCase ↔ snake_case** — wire vs Elixir spellings of the same fields (inputSchema/input_schema, serverInfo/server_info, `_meta`/meta, Mcp-Session-Id/session_id).

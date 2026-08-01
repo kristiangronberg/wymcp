@@ -96,7 +96,6 @@ defmodule Wymcp.Router do
       end
       subgraph External
           POST --> P[Plugs.Pipeline]
-          GET --> SM[Transport.StreamManager]
           GET --> S[Session]
           GET --> ST[Transport.Stream]
           DELETE --> S
@@ -112,7 +111,7 @@ defmodule Wymcp.Router do
 
   alias Wymcp.Plugs.Pipeline
   alias Wymcp.Session
-  alias Wymcp.Transport.StreamManager
+  alias Wymcp.Transport
 
   plug(:match)
   plug(:dispatch)
@@ -273,41 +272,17 @@ defmodule Wymcp.Router do
 
   defp open_stream(conn, session_pid) do
     Session.touch(session_pid)
-    last_event_id = List.first(get_req_header(conn, "last-event-id"))
 
-    case StreamManager.start_link(%{session_pid: session_pid, last_event_id: last_event_id}) do
-      {:ok, manager} ->
-        stream_response(conn, manager)
+    case Transport.Stream.serve(conn, session_pid) do
+      {:ok, conn} ->
+        conn
 
-      :ignore ->
+      {:error, :session_gone} ->
         # The session died between lookup and registration — the same
         # condition as a lookup miss, answered one step ahead of the
         # 200 commit.
         session_not_found(conn)
     end
-  end
-
-  # The 200 commits here; a manager dying in the attach gap is the
-  # accepted residue (truncated stream, client re-initializes on
-  # reconnect), so attach's {:error, :gone} is deliberately ignored and
-  # the monitor-wait returns immediately. The monitor, not the link, is
-  # what ends this wait: every handled StreamManager stop is :normal —
-  # session DOWN, push failure, keepalive failure, and replacement alike —
-  # so the link created by start_link/1 carries no fatal signal on those
-  # paths. A raise inside the manager (JSON.encode! on an unencodable
-  # consumer-supplied term in the push path) still exits non-:normal and
-  # reaches this process through the link — a pre-existing residue this
-  # restructure does not close.
-  defp stream_response(conn, manager) do
-    ref = Process.monitor(manager)
-    chunked_conn = Wymcp.Transport.Stream.open(conn)
-    _ = StreamManager.attach(manager, chunked_conn)
-
-    receive do
-      {:DOWN, ^ref, :process, ^manager, _reason} -> :ok
-    end
-
-    chunked_conn
   end
 
   defp session_not_found(conn) do

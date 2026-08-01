@@ -43,7 +43,7 @@ implements, to guide planning for the next development phase.
 
 | Feature                                      | Spec requirement | wymcp status                                                       |
 |----------------------------------------------|------------------|--------------------------------------------------------------------|
-| Streamable HTTP (POST + optional SSE)        | Defined          | ✅ POST + GET SSE via `StreamManager`                              |
+| Streamable HTTP (POST + optional SSE)        | Defined          | ✅ POST + GET SSE via `Transport.Stream`                              |
 | stdio                                        | Defined          | N/A (library is HTTP-focused)                                      |
 | Session management / `Mcp-Session-Id` header | SHOULD (HTTP)    | ✅ Full session lifecycle with idle timeout + sessionless fallback |
 | SSE keepalive                                | SHOULD           | ✅ Configurable keepalive timer                                    |
@@ -234,7 +234,7 @@ validation and route to `Methods.DeliverResponse`.
 - Lifecycle: `initialize` with dynamic capability negotiation, `notifications/initialized`, `ping`
 - Version negotiation: always responds with latest supported version (counter-proposal ready)
 - Full session management: `Mcp-Session-Id`, GenServer-per-session, idle timeout, Registry lookup
-- SSE transport: `StreamManager` with keepalive, bidirectional messaging
+- SSE transport: `Transport.Stream` with keepalive, bidirectional messaging
 - Tools: `tools/list`, `tools/call` with `outputSchema` + `structuredContent`
 - Tool metadata: optional `title/0` and `annotations/0` callbacks on `Wymcp.Tool`
 - `listChanged` capability advertised; `notifications/tools/list_changed` sent on register/unregister

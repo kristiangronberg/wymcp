@@ -42,7 +42,7 @@ defmodule Wymcp.Session do
       subgraph External
           S --> R[Registry]
           S --> DS[DynamicSupervisor]
-          S --> SM[Transport.StreamManager]
+          S --> TS[Transport.Stream]
           S --> TEL[Telemetry]
           S -->|"server.init/2, server.terminate/2"| SV(Consumer Server)
       end
@@ -72,6 +72,7 @@ defmodule Wymcp.Session do
   use GenServer
 
   alias Wymcp.ProtocolVersion
+  alias Wymcp.Transport
 
   @default_idle_timeout :timer.minutes(30)
 
@@ -257,7 +258,7 @@ defmodule Wymcp.Session do
   """
   def register_tool(pid, tool_module) do
     validate_registerable!(tool_module)
-    GenServer.call(pid, {:register_tool, tool_module})
+    GenServer.call(pid, {:register_tool, tool_module}, Transport.Stream.push_timeout() + 1_000)
   end
 
   @doc """
@@ -271,7 +272,7 @@ defmodule Wymcp.Session do
       Wymcp.Session.unregister_tool(session_pid, "administer_users")
   """
   def unregister_tool(pid, tool_name) do
-    GenServer.call(pid, {:unregister_tool, tool_name})
+    GenServer.call(pid, {:unregister_tool, tool_name}, Transport.Stream.push_timeout() + 1_000)
   end
 
   @doc """
@@ -290,33 +291,58 @@ defmodule Wymcp.Session do
   end
 
   @doc """
-  Registers (or clears) the SSE stream process for this session.
+  Registers the SSE stream process for this session.
 
-  A StreamManager calls this from its `init/1` to associate itself with
-  the session. The session monitors the stream pid — if the stream dies,
-  the session clears the reference via the :DOWN handler. Registering a
-  new pid while another stream is registered stops the old manager first,
-  closing its connection: only one active SSE stream per session, so a
-  reconnecting client does not leave a zombie stream behind. The old
-  manager is *asked* to stop rather than killed — it exits `:normal`, the
-  one reason its link to the GET request process that started it does not
-  carry fatally, so that request still finishes its response.
-
-  Pass `nil` to explicitly clear the stream (e.g. on graceful close).
+  The stream calls this from its own GET request process
+  (`Wymcp.Transport.Stream.serve/3`) before the 200 commits. The session
+  monitors the stream pid — if the stream's process dies, the session
+  clears the registration via the :DOWN handler; a stream that ends
+  without its process dying (a disconnect discovered by a failed write)
+  says so through `unregister_stream/2`. Registering a new pid while
+  another stream is registered asks the old one to stop first, closing its
+  connection: only one active SSE stream per session, so a reconnecting
+  client does not leave a zombie stream behind.
   """
-  def register_stream(pid, stream_pid) do
-    GenServer.call(pid, {:register_stream, stream_pid})
+  def register_stream(pid, stream_pid) when is_pid(stream_pid) do
+    GenServer.call(pid, {:register_stream, stream_pid}, Transport.Stream.push_timeout() + 1_000)
   end
 
   @doc """
-  Pushes a JSON-RPC message to the client via the SSE stream.
+  Clears the stream registration when the stream reports its own close.
 
-  Returns `{:error, :no_stream}` if no stream is currently registered.
-  This is the function that sampling/elicitation (Plan 4) will call to
-  send server-initiated requests to the client.
+  `Wymcp.Transport.Stream` calls this when a chunk write fails: the client
+  is gone, but the loop runs in the adapter's connection process, which
+  outlives the stream (Bandit may reuse it for the connection's next
+  request), so the session's stream monitor never fires. Without this the
+  registration goes stale and every later push waits out
+  `Wymcp.Transport.Stream.push_timeout/0` against a mailbox nobody drains.
+
+  A cast, never a call: the stream must not block on a session that may
+  itself be blocked pushing to that same stream. A pid that is no longer
+  the registered one is ignored — a replacement that registered in the
+  meantime keeps the registration it just took.
   """
-  def push_event(pid, message) do
-    GenServer.call(pid, {:push_event, message})
+  def unregister_stream(pid, stream_pid) when is_pid(stream_pid) do
+    GenServer.cast(pid, {:unregister_stream, stream_pid})
+  end
+
+  @doc """
+  Sends a JSON-RPC message to the client over the stream.
+
+  The session-level entry to `Wymcp.Transport.Stream.push/2`, which
+  documents the full reply vocabulary. Answers `{:error, :no_stream}`
+  itself when the session has no registered stream.
+
+  The call is given a timeout above the push's own
+  (`Wymcp.Transport.Stream.push_timeout/0` plus the second of margin
+  `await_client_response/4` already uses). At the default 5 000 ms the two
+  clocks are equal and the outer one starts first, so a wedged stream
+  would exit the caller with `:timeout` just before the push's
+  `{:error, :timeout}` could be returned — making the documented
+  vocabulary unreachable on exactly the case it exists for.
+  """
+  def push(pid, message) do
+    GenServer.call(pid, {:push, message}, Transport.Stream.push_timeout() + 1_000)
   end
 
   @doc """
@@ -330,14 +356,26 @@ defmodule Wymcp.Session do
   request_id, the GenServer replies to the stored `from`.
 
   Returns `{:error, :no_stream}` immediately when no SSE stream is
-  connected — or when one is registered but has not yet received its conn
-  (the router's start→attach window). A stream whose write fails answers
-  `{:error, :disconnected}`, equally immediately. `{:error, :timeout}`
+  connected. The push leg's failures are equally immediate:
+  `{:error, :disconnected}` (write failed), `{:error, :stream_down}`
+  (stream died before replying), and — rare, a wedged stream —
+  `{:error, :timeout}` from the push timeout rather than from `timeout`
+  itself. An `{:error, :timeout}` arriving only after the full `timeout`
   therefore means what it says: the request reached the client and no
-  response came back within `timeout` milliseconds.
+  response came back in time.
   """
   def await_client_response(pid, request_id, message, timeout) do
-    GenServer.call(pid, {:await_client_response, request_id, message, timeout}, timeout + 1000)
+    # Sized above BOTH clocks that can run inside the handler: the
+    # caller's own timeout and the push timeout (the handler blocks in
+    # Wymcp.Transport.Stream.push/3 before the deferred reply is even
+    # stored). A caller timeout below the push timeout would otherwise
+    # exit the caller before the push's {:error, :timeout} could be
+    # returned.
+    GenServer.call(
+      pid,
+      {:await_client_response, request_id, message, timeout},
+      max(timeout, Transport.Stream.push_timeout()) + 1_000
+    )
   end
 
   @doc """
@@ -459,11 +497,6 @@ defmodule Wymcp.Session do
     {:reply, merge_tools(state), state}
   end
 
-  def handle_call({:register_stream, nil}, _from, state) do
-    if state.stream_monitor_ref, do: Process.demonitor(state.stream_monitor_ref, [:flush])
-    {:reply, :ok, %{state | stream_pid: nil, stream_monitor_ref: nil}}
-  end
-
   def handle_call({:register_stream, stream_pid}, _from, state) when is_pid(stream_pid) do
     if Process.alive?(stream_pid) do
       if state.stream_monitor_ref, do: Process.demonitor(state.stream_monitor_ref, [:flush])
@@ -471,25 +504,44 @@ defmodule Wymcp.Session do
       ref = Process.monitor(stream_pid)
       {:reply, :ok, %{state | stream_pid: stream_pid, stream_monitor_ref: ref}}
     else
-      # A dead pid here is a poison message: the manager's own register
-      # call timed out (its start_link answered :ignore and it exited), but
-      # a timed-out GenServer.call leaves the request in this mailbox, so
-      # it still gets dequeued. Acting on it would stop the healthy current
-      # stream and end with a nil stream_pid — leave the registration
-      # untouched instead. In the live flow the manager is blocked in this
-      # very call, so alive-at-dispatch cannot regress to dead-at-handling
-      # except through that abandonment.
+      # A dead pid here is a poison message: GET1's register call timed
+      # out (a busy session) and GET1's process died; GET2 registered and
+      # is streaming — and this session then dequeues GET1's stale queued
+      # register, because a timed-out GenServer.call leaves its request in
+      # the target's mailbox. Acting on it would stop GET2's live stream
+      # and register a corpse — leave the registration untouched instead.
+      # Accepted residue: a stale register whose sender is *still alive*
+      # slips this guard — under Bandit the sender is the adapter's
+      # connection process, which normally survives its 404 — briefly
+      # stopping a live stream and registering a process that runs no
+      # loop. Wymcp.Transport.Stream pairs every failed registration with
+      # an unregister_stream cast queued behind that very message (same
+      # sender, order preserved), so the mis-registration clears itself
+      # immediately and the stopped client recovers through normal SSE
+      # reconnection.
       {:reply, :ok, state}
     end
   end
 
-  def handle_call({:push_event, _message}, _from, %{stream_pid: nil} = state) do
+  def handle_call({:push, _message}, _from, %{stream_pid: nil} = state) do
     {:reply, {:error, :no_stream}, state}
   end
 
-  def handle_call({:push_event, message}, _from, %{stream_pid: stream_pid} = state) do
-    result = GenServer.call(stream_pid, {:push, message})
-    {:reply, result, state}
+  def handle_call({:push, message}, _from, %{stream_pid: stream_pid} = state) do
+    case Transport.Stream.push(stream_pid, message) do
+      {:error, :disconnected} ->
+        # The reply already carries the authoritative answer, ordered
+        # ahead of the loop's unregister cast — clear in-band so pushes
+        # queued behind this call answer {:error, :no_stream} immediately
+        # instead of each waiting out the push timeout against a process
+        # that left the loop but stayed alive. :timeout deliberately does
+        # not clear: a chunk write may block on backpressure from a live
+        # client, and dropping a healthy stream for it would be wrong.
+        {:reply, {:error, :disconnected}, clear_stream(state)}
+
+      result ->
+        {:reply, result, state}
+    end
   end
 
   def handle_call({:await_client_response, request_id, message, timeout}, from, state) do
@@ -498,17 +550,19 @@ defmodule Wymcp.Session do
         {:reply, {:error, :no_stream}, state}
 
       stream_pid ->
-        # Mirrors push_event/2: whatever the stream answers is the caller's
-        # answer. A manager registered but not yet attached says
-        # {:error, :no_stream}; a broken socket says {:error, :disconnected}.
-        # Both are immediate and true, whereas storing the request and
-        # scheduling a timeout would make an undelivered request look like a
-        # client that never answered.
-        case GenServer.call(stream_pid, {:push, message}) do
+        # Mirrors push/2: whatever the stream answers is the caller's
+        # answer, immediately and truthfully — storing the request and
+        # scheduling a timeout instead would make an undelivered request
+        # look like a client that never answered.
+        case Transport.Stream.push(stream_pid, message) do
           :ok ->
             timer_ref = Process.send_after(self(), {:server_request_timeout, request_id}, timeout)
             pending = Map.put(state.pending_server_requests, request_id, {from, timer_ref})
             {:noreply, %{state | pending_server_requests: pending}}
+
+          {:error, :disconnected} ->
+            # Same in-band clear as handle_call({:push, ...}) — see there.
+            {:reply, {:error, :disconnected}, clear_stream(state)}
 
           {:error, reason} ->
             {:reply, {:error, reason}, state}
@@ -533,6 +587,12 @@ defmodule Wymcp.Session do
         {:noreply, %{state | pending_server_requests: pending}}
     end
   end
+
+  def handle_cast({:unregister_stream, stream_pid}, %{stream_pid: stream_pid} = state) do
+    {:noreply, clear_stream(state)}
+  end
+
+  def handle_cast({:unregister_stream, _stale_pid}, state), do: {:noreply, state}
 
   @impl GenServer
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{stream_monitor_ref: ref} = state) do
@@ -574,22 +634,27 @@ defmodule Wymcp.Session do
       "method" => "notifications/tools/list_changed"
     }
 
-    GenServer.call(stream_pid, {:push, message})
+    _ = Transport.Stream.push(stream_pid, message)
     :ok
   end
 
-  # Asking, not killing. The old manager is linked to the GET request process
-  # that started it (StreamManager.start_link/1), and an untrappable
-  # Process.exit(old_pid, :kill) propagates :killed across that link, tearing
-  # the request process down before it can finish its response (probed).
-  # The cast is also the only non-blocking option: a synchronous
-  # GenServer.stop/1 from inside this handle_call stalls the session whenever
-  # the old manager is itself blocked in a call or a chunk write. The old
-  # monitor is already flushed, so the manager's DOWN cannot clear the new
+  # Asking, not killing — and never blocking. replace/1 is a plain send: a
+  # synchronous stop from inside this handle_call would stall the session
+  # whenever the old stream is blocked in a chunk write. The old monitor is
+  # already flushed, so the old stream's DOWN cannot clear the new
   # registration.
   defp stop_replaced_stream(nil, _new_pid), do: :ok
   defp stop_replaced_stream(same_pid, same_pid), do: :ok
-  defp stop_replaced_stream(old_pid, _new_pid), do: GenServer.cast(old_pid, :replaced)
+  defp stop_replaced_stream(old_pid, _new_pid), do: Transport.Stream.replace(old_pid)
+
+  # Demonitor as well as clear: handle_info/2 has three explicit clauses
+  # and no catch-all, so a DOWN arriving later — the connection process
+  # does die eventually — with a ref this state no longer knows would
+  # crash the session on a function_clause.
+  defp clear_stream(state) do
+    if state.stream_monitor_ref, do: Process.demonitor(state.stream_monitor_ref, [:flush])
+    %{state | stream_pid: nil, stream_monitor_ref: nil}
+  end
 
   # -- Idle timeout --
 

@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Wymcp.Session.unregister_stream/2` — the stream clears its own
+  registration when a chunk write fails. The stream now runs inside the
+  adapter's connection process, which outlives it, so a disconnect does
+  not reach the session's stream monitor; without this a vanished client
+  would leave a registration behind and every later push would wait out
+  the push timeout.
+- `Wymcp.Transport.Stream.push_timeout/0` publishes the push call's
+  timeout so callers can size their own `GenServer.call` timeouts above
+  it.
+
+### Changed
+
+- **BREAKING:** the SSE stream is no longer a separate GenServer.
+  `Wymcp.Transport.Stream` now runs the stream as a receive loop in the
+  GET request process itself: register with the session, commit the 200,
+  send the priming event, then serve pushes and keepalives from the loop.
+  `Wymcp.Transport.StreamManager` is deleted, and with it the two-phase
+  start (`attach/2`) and its `{:error, :gone}` return.
+  `Transport.Stream`'s old conn-write helpers (`open/1`, `push/3`,
+  `push_empty/2`, `push_keepalive/1`) are no longer public; the module's
+  API is `serve/3`, `push/3`, `replace/1`, and `push_timeout/0`.
+- **BREAKING:** `Wymcp.Session.push_event/2` is renamed to
+  `Wymcp.Session.push/2`.
+- **BREAKING:** `Wymcp.Session.register_stream/2` no longer accepts `nil`
+  ("pass nil to explicitly clear the stream"). Clearing is the stream
+  monitor's and `unregister_stream/2`'s job now. The function guards
+  `is_pid/1`, so a `nil` call fails at the caller instead of reaching —
+  and crashing — the session process.
+- **BREAKING:** push error vocabulary: `{:error, :stream_down}` (the
+  stream died before replying) and `{:error, :timeout}` (no reply within
+  the 5 s push timeout) are new; `{:error, :no_stream}` now means exactly
+  "this session has no stream" — the registered-but-not-attached case
+  died with the attach phase; `{:error, :disconnected}` is unchanged.
+- `Wymcp.Session.push/2`, `register_tool/2`, `unregister_tool/2`, and
+  `register_stream/2` now call with a timeout above the push timeout
+  instead of the 5 000 ms default, and `await_client_response/4` sizes its
+  call above both its own `timeout` and the push timeout. At equal
+  timeouts a wedged stream exits the caller with `:timeout` before the
+  push's own `{:error, :timeout}` can be returned.
+
+### Fixed
+
+- Under Bandit, every GET stream died on its first SSE write: Bandit
+  requires the process that owns the socket to write the response, and the
+  priming event (like every later push and keepalive) was written from the
+  StreamManager process, not the GET request process. All chunk writes now
+  happen in the request process. Plug.Test has no such owner check, which
+  is why the suite never saw it; a Bandit-backed regression test now
+  covers the real-socket path.
+
 ## [0.9.0]
 
 ### Added

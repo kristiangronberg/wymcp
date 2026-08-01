@@ -62,13 +62,16 @@ defmodule Wymcp.MixProject do
 
   defp deps do
     [
+      {:bandit, "~> 1.0", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
       {:jsv, "~> 0.16"},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
-      {:plug, "~> 1.15"}
+      {:plug, "~> 1.15"},
+      {:req, "~> 0.7", only: [:dev, :test]},
+      {:thousand_island, "~> 1.5", only: [:dev, :test]}
     ]
   end
 

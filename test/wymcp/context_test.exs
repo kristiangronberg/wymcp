@@ -389,9 +389,9 @@ defmodule Wymcp.ContextTest do
 
   defp fake_stream_loop(test_pid) do
     receive do
-      {:"$gen_call", from, {:push, message}} ->
+      {:push, ref, message} ->
         send(test_pid, {:fake_stream_push, message})
-        GenServer.reply(from, :ok)
+        send(ref, {ref, :ok})
         fake_stream_loop(test_pid)
     end
   end

@@ -386,9 +386,9 @@ defmodule Wymcp.IntegrationTest do
          verify the stream cleans up. This exercises the bidirectional
          channel that sampling/elicitation will depend on.
 
-         Note: Plug.Test does not support reading chunked response bodies,
-         so we verify behavior through session state inspection rather than
-         parsing SSE events from the wire.
+         The returned conn carries the accumulated SSE bytes (the request
+         process writes the chunks), so the wire is asserted directly
+         alongside session-state inspection.
          """
     test "GET opens SSE stream, session termination closes it" do
       # 1. Initialize
@@ -446,6 +446,7 @@ defmodule Wymcp.IntegrationTest do
       assert_receive {:stream_done, stream_conn}, 2000
       assert stream_conn.status == 200
       assert stream_conn.state == :chunked
+      assert stream_conn.resp_body == "id: evt-1\ndata: \n\n"
 
       # Clean up the task
       Task.await(stream_task, 1000)
@@ -504,9 +505,10 @@ defmodule Wymcp.IntegrationTest do
          response. The test process reads the SSE push from the stream,
          then POSTs the response.
 
-         Note: Plug.Test does not support reading chunked response bodies,
-         so we intercept the sampling request by monitoring the session's
-         pending_server_requests state rather than parsing SSE events.
+         The sampling request id is intercepted by polling the session's
+         pending_server_requests state (the id is needed to POST the
+         response); the SSE bytes themselves are asserted at the end from
+         the stream task's returned conn.
          """
     test "tool calls Context.sample/3 and receives client response" do
       # 1. Initialize with sampling capability
@@ -606,7 +608,8 @@ defmodule Wymcp.IntegrationTest do
 
       # 8. Cleanup: terminate session to close the SSE stream
       Session.terminate_session(session_id)
-      assert_receive {:stream_done, _}, 2000
+      assert_receive {:stream_done, stream_conn}, 2000
+      assert stream_conn.resp_body =~ "sampling/createMessage"
       Task.await(stream_task, 1000)
     end
   end

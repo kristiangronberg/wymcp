@@ -3,7 +3,6 @@ defmodule Wymcp.SessionTest do
 
   alias Wymcp.Session
   alias Wymcp.Testing
-  alias Wymcp.Transport.StreamManager
 
   defmodule TerminateTracker do
     @moduledoc false
@@ -464,28 +463,17 @@ defmodule Wymcp.SessionTest do
       assert state.stream_pid == stream_pid
     end
 
-    test "register_stream/2 with nil clears the stream pid" do
-      {:ok, pid, _id} = start_session()
-      stream_pid = spawn(fn -> Process.sleep(:infinity) end)
-
-      Session.register_stream(pid, stream_pid)
-      assert :ok = Session.register_stream(pid, nil)
-      state = Session.get_state(pid)
-      assert state.stream_pid == nil
-    end
-
     @tag doc: """
          One active stream per session: registering a new stream pid must
-         stop the previous manager, or a reconnecting client leaves a
+         stop the previous stream, or a reconnecting client leaves a
          zombie stream consuming keepalives until its next write fails.
-         The stop is an asynchronous :replaced cast, never
-         Process.exit(old, :kill): a StreamManager is linked to the GET
-         request process that started it, and a :killed exit propagates
-         across that link and tears the request process down before it can
-         finish its response. The stand-in is spawn_link'd for exactly
-         that reason — this test process stands in for the request
-         process, so a regression to :kill surfaces here as the test
-         process itself exiting :killed rather than as a failed assertion.
+         The stop is an asking :replaced message (Transport.Stream.replace/1),
+         never Process.exit(old, :kill): the stream IS the GET request
+         process serving a committed 200, so killing it kills the response
+         mid-stream. The stand-in is spawn_link'd for exactly that reason —
+         this test process stands in for the request process, so a
+         regression to a kill surfaces here as the test process itself
+         exiting :killed rather than as a failed assertion.
          """
     test "register_stream/2 with a new pid stops the previously registered stream" do
       {:ok, pid, _id} = start_session()
@@ -496,7 +484,7 @@ defmodule Wymcp.SessionTest do
       Session.register_stream(pid, old_stream)
       assert :ok = Session.register_stream(pid, new_stream)
 
-      assert_receive {:replaced_cast, ^old_stream}, 1000
+      assert_receive {:stream_replaced, ^old_stream}, 1000
       assert_receive {:DOWN, ^ref, :process, ^old_stream, :normal}, 1000
       assert Session.get_state(pid).stream_pid == new_stream
     end
@@ -508,19 +496,19 @@ defmodule Wymcp.SessionTest do
       Session.register_stream(pid, stream_pid)
       assert :ok = Session.register_stream(pid, stream_pid)
 
-      refute_receive {:replaced_cast, ^stream_pid}, 50
+      refute_receive {:stream_replaced, ^stream_pid}, 50
       assert Process.alive?(stream_pid)
       assert Session.get_state(pid).stream_pid == stream_pid
     end
 
     @tag doc: """
-         A dead pid can arrive here: the registering manager's own
-         register_stream call timed out (a session mailbox running behind),
-         start_link answered :ignore, and the manager exited — but a
-         timed-out GenServer.call leaves its request in the target's
-         mailbox, so the session still dequeues it later. Acting on that
-         poison message would stop the healthy current stream and leave
-         stream_pid nil; it must leave the registration untouched.
+         A dead pid can arrive here: GET1's register_stream call timed out
+         (a session mailbox running behind) and GET1 died; GET2 registered
+         and is streaming — and the session then dequeues GET1's stale
+         register, because a timed-out GenServer.call leaves its request
+         in the target's mailbox. Acting on that poison message would stop
+         GET2's healthy stream and register a corpse; it must leave the
+         registration untouched.
          """
     test "register_stream/2 with a dead pid does not replace the current stream" do
       {:ok, pid, _id} = start_session()
@@ -529,12 +517,93 @@ defmodule Wymcp.SessionTest do
 
       dead_pid = spawn(fn -> :ok end)
       ref = Process.monitor(dead_pid)
-      assert_receive {:DOWN, ^ref, :process, ^dead_pid, :normal}
+      # :normal when the monitor won the race, :noproc when the pid was
+      # already gone — either way the pid is now provably dead.
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _reason}
 
       assert :ok = Session.register_stream(pid, dead_pid)
 
-      refute_receive {:replaced_cast, ^stream_pid}, 50
+      refute_receive {:stream_replaced, ^stream_pid}, 50
       assert Session.get_state(pid).stream_pid == stream_pid
+    end
+
+    @tag doc: """
+         The disconnect path's cleanup, and the reason the nil-clearing
+         branch's body survived its clause: a stream whose write failed
+         has to say so, because its process — the adapter's connection
+         process — can outlive the stream and never fire the monitor.
+         Clearing must demonitor too: handle_info/2 has no catch-all, so
+         a DOWN arriving later with a ref this state no longer knows
+         would crash the session.
+         """
+    test "unregister_stream/2 clears the registration for the current stream pid" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      :ok = Session.register_stream(pid, stream_pid)
+      :ok = Session.unregister_stream(pid, stream_pid)
+
+      assert Session.get_state(pid).stream_pid == nil
+      assert Session.get_state(pid).stream_monitor_ref == nil
+    end
+
+    @tag doc: """
+         The identity guard: a late close from a stream that has already
+         been replaced must not clear the successor's registration. The
+         cast is fire-and-forget, so nothing orders it against the
+         replacement — the guard is the whole protection.
+         """
+    test "unregister_stream/2 ignores a pid that is no longer registered" do
+      {:ok, pid, _id} = start_session()
+      old_stream = spawn(fn -> Process.sleep(:infinity) end)
+      new_stream = spawn(fn -> Process.sleep(:infinity) end)
+
+      :ok = Session.register_stream(pid, old_stream)
+      :ok = Session.register_stream(pid, new_stream)
+      :ok = Session.unregister_stream(pid, old_stream)
+
+      assert Session.get_state(pid).stream_pid == new_stream
+    end
+
+    @tag doc: """
+         The nil-clearing form died with the deleted design; the guard
+         keeps the removal a clean caller-side FunctionClauseError instead
+         of a function_clause crash inside the session process, which
+         would take the whole session — assigns, pending requests, runtime
+         tools — down with it.
+         """
+    test "register_stream/2 rejects nil at the boundary" do
+      {:ok, pid, _id} = start_session()
+
+      assert_raise FunctionClauseError, fn -> Session.register_stream(pid, nil) end
+      assert Process.alive?(pid)
+    end
+
+    @tag doc: """
+         In-band clearing: {:error, :disconnected} is the session's own
+         authoritative answer, ordered ahead of the loop's unregister
+         cast, so the registration must already be gone when the reply
+         returns — pushes queued behind this call answer {:error,
+         :no_stream} immediately instead of each waiting out the push
+         timeout against a process that left the loop but stayed alive.
+         """
+    test "push/2 clears the registration in-band on {:error, :disconnected}" do
+      {:ok, pid, _id} = start_session()
+
+      stream_pid =
+        spawn(fn ->
+          receive do
+            {:push, ref, _message} -> send(ref, {ref, {:error, :disconnected}})
+          end
+
+          Process.sleep(:infinity)
+        end)
+
+      :ok = Session.register_stream(pid, stream_pid)
+      assert {:error, :disconnected} = Session.push(pid, %{"jsonrpc" => "2.0"})
+
+      assert Session.get_state(pid).stream_pid == nil
+      assert Session.get_state(pid).stream_monitor_ref == nil
     end
 
     @tag doc: """
@@ -556,18 +625,19 @@ defmodule Wymcp.SessionTest do
       assert state.stream_pid == nil
     end
 
-    test "push_event/2 returns {:error, :no_stream} when no stream registered" do
+    test "push/2 returns {:error, :no_stream} when no stream registered" do
       {:ok, pid, _id} = start_session()
-      assert {:error, :no_stream} = Session.push_event(pid, %{"test" => true})
+      assert {:error, :no_stream} = Session.push(pid, %{"test" => true})
     end
 
     @tag doc: """
-         push_event/2 delegates to the stream process. We test with a fake
-         stream that receives the message, since real StreamManager requires
+         push/2 delegates to the stream process through
+         Transport.Stream.push/2's monitor+alias protocol. We test with a
+         fake stream speaking that protocol, since a real stream requires
          a Plug.Conn. A failure here means the session is not forwarding
          to the stream pid correctly.
          """
-    test "push_event/2 sends message to stream process" do
+    test "push/2 sends the message to the stream process" do
       {:ok, pid, _id} = start_session()
 
       test_pid = self()
@@ -575,8 +645,8 @@ defmodule Wymcp.SessionTest do
       stream_pid =
         spawn(fn ->
           receive do
-            {:"$gen_call", from, {:push, message}} ->
-              GenServer.reply(from, :ok)
+            {:push, ref, message} ->
+              send(ref, {ref, :ok})
               send(test_pid, {:pushed, message})
           end
 
@@ -584,7 +654,7 @@ defmodule Wymcp.SessionTest do
         end)
 
       Session.register_stream(pid, stream_pid)
-      assert :ok = Session.push_event(pid, %{"jsonrpc" => "2.0", "method" => "test"})
+      assert :ok = Session.push(pid, %{"jsonrpc" => "2.0", "method" => "test"})
       assert_receive {:pushed, %{"jsonrpc" => "2.0", "method" => "test"}}, 1000
     end
   end
@@ -662,29 +732,6 @@ defmodule Wymcp.SessionTest do
       message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
 
       assert {:error, :no_stream} = Session.await_client_response(pid, request_id, message, 5000)
-    end
-
-    @tag doc: """
-         The register→attach window: a real StreamManager registers with the
-         session in init/1 but holds no conn until attach/2, so its push
-         answers {:error, :no_stream}. await_client_response must forward
-         that immediately, the way push_event/2 does. A failure here shows
-         up as {:error, :timeout} after the full timeout instead — the
-         request was never delivered and the caller was never told, which
-         is what discarding the push result costs.
-         """
-    test "returns {:error, :no_stream} when the stream is registered but not attached" do
-      {:ok, pid, _id} = start_ready_session()
-
-      assert {:ok, stream_pid} = StreamManager.start_link(%{session_pid: pid})
-      assert Session.get_state(pid).stream_pid == stream_pid
-
-      request_id = "srv-preattach"
-      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
-
-      assert {:error, :no_stream} = Session.await_client_response(pid, request_id, message, 200)
-
-      :ok = GenServer.stop(stream_pid)
     end
 
     @tag doc: """
@@ -801,25 +848,25 @@ defmodule Wymcp.SessionTest do
     stream_pid
   end
 
-  # Stands in for a StreamManager the way the router really starts one: linked
-  # to the process that started it (spawn_link here, StreamManager.start_link/1
-  # there), so a replacement that kills instead of asking takes this test
-  # process down with it. Forwards the session's :replaced cast instead of
-  # handling it, then returns — exiting :normal, the same reason
-  # StreamManager's own clause uses.
+  # Stands in for a stream the way it really runs: linked to the process
+  # the response belongs to (spawn_link here; in production the stream IS
+  # the GET request process), so a replacement that kills instead of
+  # asking takes this test process down with it. Forwards the :replaced
+  # message instead of handling it, then returns — ending like a replaced
+  # loop does.
   defp spawn_linked_stream(test_pid) do
     spawn_link(fn ->
       receive do
-        {:"$gen_cast", :replaced} -> send(test_pid, {:replaced_cast, self()})
+        :replaced -> send(test_pid, {:stream_replaced, self()})
       end
     end)
   end
 
   defp receive_loop(test_pid) do
     receive do
-      {:"$gen_call", from, {:push, message}} ->
+      {:push, ref, message} ->
         send(test_pid, {:fake_stream_push, message})
-        GenServer.reply(from, :ok)
+        send(ref, {ref, :ok})
         receive_loop(test_pid)
     end
   end
