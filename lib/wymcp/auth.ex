@@ -1,6 +1,7 @@
 defmodule Wymcp.Auth do
   @moduledoc """
-  Behaviour for MCP request authentication.
+  The consumer contract for MCP request authentication: `authenticate/1`
+  validates the request's Bearer token and adds identity to `conn.assigns`.
 
   Consuming applications implement this behaviour to validate Bearer tokens
   from the `Authorization` header. The implementation typically:

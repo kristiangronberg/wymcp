@@ -21,8 +21,25 @@ The params object of a `tools/call` request, carrying `action` + `data`.
 Optional on the wire: absent or JSON-null arguments read as the empty
 object.
 
+**Auth behaviour**
+`Wymcp.Auth`
+
+**auth check**
+The wire check that calls the configured Auth behaviour and answers 401
+plus the `WWW-Authenticate` challenge on failure. Implemented by
+`Wymcp.Plugs.Auth`; distinct from the Auth behaviour — the consumer
+contract it calls.
+
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
+
+**error dialect**
+The error-body convention an HTTP answer speaks. Wymcp has three
+structured dialects: the JSON-RPC dialect (the enveloped error object
+POST answers), the plain-JSON dialect (the flat `%{error: "…"}` object
+the GET/DELETE route errors answer), and the tool dialect (the `isError`
+tool-result payload). Each route's errors speak one dialect.
+_Avoid_: register, error register, error shape
 
 **event ID**
 The monotonic per-event SSE identifier (`evt-N`), carried on the wire as
@@ -47,6 +64,11 @@ The periodic SSE comment (default 15 s) that keeps a stream's connection
 from being idle-disconnected by proxies. Distinct from the session idle
 timeout.
 
+**origin check**
+The wire check rejecting requests whose `Origin` header is not on the
+configured allowlist — DNS-rebinding protection. Implemented by
+`Wymcp.Plugs.OriginCheck` (doc-hidden, hence defined here).
+
 **priming event**
 The initial empty SSE event a new stream sends, giving the client an
 event ID for reconnection.
@@ -65,6 +87,13 @@ _Avoid_: session-init map
 **stream**
 `Wymcp.Transport.Stream`
 _Avoid_: StreamManager, stream manager
+
+**wire check**
+A plug that may reject a request at the HTTP boundary, before the request
+touches any session state. Wymcp has two: the origin check and the auth
+check, run in that order.
+_Avoid_: wire-level guard, guard (for rejecting plugs), gate (for
+rejecting plugs)
 
 ## Grandfathered (pending define)
 
@@ -164,9 +193,7 @@ end collect the synonym sets that span entries.
 
 ### Auth & validation
 
-- **Auth behaviour** — the consumer contract validating a request's Bearer token (`authenticate/1`), adding identity to conn assigns; failures get 401 + `WWW-Authenticate: Bearer`. (`Wymcp.Auth`, `Wymcp.Plugs.Auth`)
 - **Noop auth** — the default pass-through Auth implementation. (`Wymcp.Auth.Noop`)
-- **origin check** — allowlist rejection of requests by `Origin` header; DNS-rebinding protection. (`Wymcp.Plugs.OriginCheck`)
 - **envelope validation** — validating every inbound message against the MCP schema's `JSONRPCMessage` definition (priv/schema.json, JSON Schema 2020-12, compiled at build time). (`Wymcp.Plugs.Validate`, `Wymcp.JsonRpc`)
 - **validation layers** — four distinct stages share the word "validate": action-schema validation at boot and at runtime registration (`validate_actions!`), envelope validation (`Plugs.Validate`), tools/call argument validation (`validate_arguments` / `validate_schema`), and in-dispatch checks (required, required_one_of, unknown params). Flagged as overload debt. (`Wymcp.Tool`, `Wymcp.Plugs.Validate`, `Wymcp.Methods.ToolsCall`)
 
