@@ -77,8 +77,22 @@ event ID for reconnection.
 `Wymcp.Transport.Stream.push/2`
 _Avoid_: push event, push_event
 
+**push ack**
+The stream loop's answer to one push — `:ok` for a completed chunk write,
+an error tuple otherwise. Delivered to whoever awaits the push: the pusher
+directly on a plain push, the session on a server-request round trip's
+push leg.
+_Avoid_: push reply, push result
+
 **reserved name**
 `Wymcp.Help.uses_reserved_name?/1`
+
+**server-request round trip**
+The blocking round trip a server-initiated request (sampling, elicitation)
+makes: the session pushes the request over SSE, holds the calling process,
+and unblocks it when the client POSTs the response back
+(`await_client_response` → `deliver_response`).
+_Avoid_: deferred reply
 
 **session opts**
 `Wymcp.Testing.build_session_opts/1`
@@ -87,6 +101,12 @@ _Avoid_: session-init map
 **stream**
 `Wymcp.Transport.Stream`
 _Avoid_: StreamManager, stream manager
+
+**stream-answered push**
+The push design in which the stream loop answers the pusher itself: the
+session hands the message and the caller's reply reference to the loop
+and never blocks on a socket write.
+_Avoid_: forwarded ack
 
 **wire check**
 A plug that may reject a request at the HTTP boundary, before the request
@@ -180,7 +200,6 @@ end collect the synonym sets that span entries.
 - **requestedSchema** — the flat JSON Schema an elicitation sends for the client to render as a form. (`Wymcp.Context.elicit`)
 - **accept / decline / cancel** — the elicitation response outcomes, carried in its `"action"` field (see the action overload). (`Wymcp.Context.elicit`)
 - **model preferences** — sampling hints and priorities (cost/speed/intelligence priorities, model-name hints). (`Wymcp.Context.sample`, priv/schema.json)
-- **deferred reply** — the blocking round-trip for server-initiated requests: push the request over SSE, hold the caller (`await_client_response`), unblock when the client POSTs the response (`deliver_response`). (`Wymcp.Session`, `Wymcp.Methods.DeliverResponse`)
 - **pending requests** — in-flight client→server requests tracked on the session (`track_request` / `complete_request`). (`Wymcp.Session.State`)
 - **pending server requests** — in-flight server→client requests (sampling/elicitation) awaiting a client reply. (`Wymcp.Session.State`)
 
