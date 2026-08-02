@@ -80,13 +80,22 @@ defmodule Wymcp.Telemetry do
   * `[:wymcp, :auth, :reject]` — auth module returned `{:error, reason}`
     - Measurements: `%{system_time: integer()}`
     - Metadata: `%{auth_module: module(), reason: String.t(),
-      request_id: term(), method: String.t() | nil}`
+      request_id: term() | nil, method: String.t() | nil,
+      http_method: String.t()}`
 
   * `[:wymcp, :auth, :error]` — auth module raised an exception
     - Measurements: `%{system_time: integer()}`
     - Metadata: `%{auth_module: module(), exception: String.t(),
-      error: String.t(), request_id: term(),
-      method: String.t() | nil}`
+      error: String.t(), request_id: term() | nil,
+      method: String.t() | nil, http_method: String.t()}`
+
+  For auth events, `http_method` is the conn's HTTP verb (`"POST"`,
+  `"GET"`, `"DELETE"`) — as this library observed it, so an upstream
+  rewriter such as `Plug.Head` reports its rewritten verb.
+  `request_id` and `method` come from the parsed
+  request body and are `nil` off POST — `http_method` is what
+  distinguishes a GET/DELETE reject from a POST reject whose body did
+  not parse.
 
   * `[:wymcp, :server, :reject]` — the consumer's `c:Wymcp.Server.init/2`
     returned `{:error, reason}`; the session is terminated and the

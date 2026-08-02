@@ -224,6 +224,27 @@ forward "/mcp", Wymcp.Router,
 
 Values are strings or `{module, function, args}` tuples resolved per request.
 
+Authentication is enforced per request on every route — POST, the GET SSE
+stream, and DELETE. A rejected GET or DELETE answers the same 401 and
+`WWW-Authenticate` challenge with a flat `{"error": "..."}` JSON body (the
+routes' plain-JSON dialect) instead of a JSON-RPC envelope. An SSE stream
+that is already open is not re-checked mid-stream; a reconnect is a fresh
+GET and re-authenticates.
+
+### 6. (Optional) Restrict browser origins
+
+```elixir
+forward "/mcp", Wymcp.Router,
+  tools: [MyApp.Tools.Calculator],
+  origin: ["http://localhost:4000"]
+```
+
+`origin:` is an allowlist of `Origin` header values — DNS-rebinding
+protection for browser-based clients. A request with no `Origin` header
+passes even when an allowlist is configured (non-browser clients — curl,
+SDKs — send none); a disallowed value answers 403 and a duplicated header
+400. Like authentication, the check runs on every route.
+
 ## Architecture
 
 ```mermaid
@@ -233,7 +254,11 @@ flowchart LR
     CA -->|implements| Server
 
     Router --> Pipeline["Plugs.Pipeline"]
-    Pipeline --> Auth
+    Router --> OriginCheck["Plugs.OriginCheck"]
+    Router --> AuthPlug["Plugs.Auth"]
+    Pipeline --> OriginCheck
+    Pipeline --> AuthPlug
+    AuthPlug --> Auth
     Pipeline --> Validate["Plugs.Validate"]
     Pipeline --> Dispatch["Plugs.Dispatch"]
     Dispatch --> Methods["Methods.*"]
@@ -286,10 +311,13 @@ legal everywhere else — including the tool-level `description()` and
 ## Modules
 
 [`Wymcp.Router`](lib/wymcp/router.ex) is the Plug entry point. It accepts
-`:tools` (a list of `Wymcp.Tool` modules) and an optional `:auth` module, then
-runs the request through JSON parsing, authentication, MCP schema validation,
-and method dispatch. Consuming applications forward a route to this module and
-do not interact with the internal plug pipeline directly.
+`:tools` (a list of `Wymcp.Tool` modules) plus optional `:auth` and `:origin`
+options, and runs every non-fallthrough route — POST, the GET SSE stream,
+DELETE — through both wire checks (origin, then auth) before anything touches
+session state; on POST the checks run inside the plug pipeline, where JSON
+parsing sits between them, and the request then continues through MCP schema
+validation and method dispatch. Consuming applications forward a route to
+this module and do not interact with the internal plug pipeline directly.
 
 [`Wymcp.Tool`](lib/wymcp/tool.ex) is the behaviour that consuming applications
 implement to expose capabilities to LLMs. Each tool declares a name, description,
@@ -349,8 +377,9 @@ naturally with the rest of the host application's pipeline.
 [`Wymcp.Telemetry`](lib/wymcp/telemetry.ex) documents the `:telemetry` events
 emitted by Wymcp so consuming applications can attach handlers for monitoring,
 logging, and metrics. Events cover the session lifecycle
-(`[:wymcp, :session, :start | :expired]`) and tool execution
-(`[:wymcp, :tool, :start | :stop | :error]`) with measurements and metadata
+(`[:wymcp, :session, :start | :expired]`), tool execution
+(`[:wymcp, :tool, :start | :stop | :error]`), and authentication
+(`[:wymcp, :auth, :reject | :error]`) with measurements and metadata
 suitable for `:telemetry_metrics`.
 
 [`Wymcp.Session`](lib/wymcp/session.ex) is the GenServer that holds state for a
@@ -370,10 +399,12 @@ requests are validated against the official protocol definition without runtime
 schema parsing.
 
 [`Wymcp.Response`](lib/wymcp/response.ex) is the lowest-level output module in
-the pipeline. Every MCP response — successful tool result, JSON-RPC error, or
-auth rejection — flows through `send_json/2`, which preserves any
-previously-set HTTP status code and halts the connection so downstream plugs do
-not execute after a response is sent.
+the pipeline — one sender per error dialect. JSON-RPC envelopes — tool results,
+JSON-RPC errors, POST auth rejections — go through `send_json/2`, which
+preserves any previously-set HTTP status code; the flat plain-JSON errors of
+the GET/DELETE routes and their wire checks go through `send_plain_error/3`.
+Both halt the connection so downstream plugs do not execute after a response
+is sent.
 
 [`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) is the chunked SSE
 connection for one session, run as a receive loop by the GET request process

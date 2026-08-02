@@ -34,4 +34,29 @@ defmodule Wymcp.ResponseTest do
       assert conn.halted
     end
   end
+
+  describe "send_plain_error/3" do
+    test "sends the flat plain-JSON error object with the given status" do
+      conn =
+        conn(:post, "/")
+        |> Response.send_plain_error(403, "Origin not allowed: http://evil.example")
+
+      assert conn.status == 403
+
+      assert JSON.decode!(conn.resp_body) ==
+               %{"error" => "Origin not allowed: http://evil.example"}
+    end
+
+    test "sets the JSON content type" do
+      conn = conn(:post, "/") |> Response.send_plain_error(400, "bad")
+
+      assert get_resp_header(conn, "content-type") |> hd() =~ "application/json"
+    end
+
+    test "halts the connection" do
+      conn = conn(:post, "/") |> Response.send_plain_error(401, "nope")
+
+      assert conn.halted
+    end
+  end
 end

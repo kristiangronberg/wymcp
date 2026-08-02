@@ -11,17 +11,18 @@ defmodule Wymcp.Plugs.OriginCheck do
   def init(opts), do: opts
 
   @impl Plug
-  def call(%Plug.Conn{} = conn, _opts) do
+  def call(%Plug.Conn{} = conn, opts) do
     wymcp_opts = conn.assigns[:wymcp] || []
+    dialect = Keyword.get(opts, :error_dialect, :json_rpc)
 
     case Keyword.get(wymcp_opts, :origin) do
       nil -> conn
       [] -> conn
-      allowlist when is_list(allowlist) -> check_origin(conn, allowlist)
+      allowlist when is_list(allowlist) -> check_origin(conn, allowlist, dialect)
     end
   end
 
-  defp check_origin(conn, allowlist) do
+  defp check_origin(conn, allowlist, dialect) do
     case get_req_header(conn, "origin") do
       [] ->
         conn
@@ -30,31 +31,30 @@ defmodule Wymcp.Plugs.OriginCheck do
         if origin in allowlist do
           conn
         else
-          reject_origin(conn, origin)
+          send_rejection(conn, 403, "Origin not allowed: #{origin}", dialect)
         end
 
       [_, _ | _] ->
-        duplicated_origin(conn)
+        send_rejection(
+          conn,
+          400,
+          "Duplicated Origin header. Send exactly one Origin header.",
+          dialect
+        )
     end
   end
 
-  defp reject_origin(conn, origin) do
-    data = %{error: "Origin not allowed: #{origin}"}
-    response = JsonRpc.error_response(:invalid_request, nil, data)
+  # The JSON-RPC dialect's id is always nil here: on POST this plug runs
+  # before parse_body, and on GET/DELETE no body is parsed at all.
+  defp send_rejection(conn, status, message, :json_rpc) do
+    response = JsonRpc.error_response(:invalid_request, nil, %{error: message})
 
     conn
-    |> put_status(403)
+    |> put_status(status)
     |> send_json(response)
   end
 
-  # Runs before parse_body in the pipeline, so no request id is available —
-  # same as reject_origin/2.
-  defp duplicated_origin(conn) do
-    data = %{error: "Duplicated Origin header. Send exactly one Origin header."}
-    response = JsonRpc.error_response(:invalid_request, nil, data)
-
-    conn
-    |> put_status(400)
-    |> send_json(response)
+  defp send_rejection(conn, status, message, :plain_json) do
+    send_plain_error(conn, status, message)
   end
 end

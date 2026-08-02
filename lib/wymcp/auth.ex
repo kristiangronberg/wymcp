@@ -19,6 +19,14 @@ defmodule Wymcp.Auth do
 
   When no `:auth` option is provided, `Wymcp.Auth.Noop` is used (no authentication).
 
+  `authenticate/1` runs once per request on every non-fallthrough route —
+  POST, GET (the SSE stream), and DELETE. Authenticate from connection
+  data such as the `Authorization` header, never from the request body:
+  on GET and DELETE no body is parsed, so `conn.body_params` is
+  unfetched. Auth is per-request only — an already-open SSE stream lives
+  until its session ends, and a reconnect is a fresh GET that
+  re-authenticates naturally.
+
   ## Example implementation
 
       defmodule MyApp.McpAuth do

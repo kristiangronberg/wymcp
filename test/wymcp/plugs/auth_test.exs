@@ -23,6 +23,13 @@ defmodule Wymcp.Plugs.AuthTest do
     def authenticate(_conn), do: raise("boom")
   end
 
+  defmodule AtomRejectingAuth do
+    @behaviour Wymcp.Auth
+
+    @impl Wymcp.Auth
+    def authenticate(_conn), do: {:error, :invalid_token}
+  end
+
   defmodule MetadataUrl do
     def url, do: "https://example.com/.well-known/oauth-protected-resource/mcp"
   end
@@ -98,6 +105,7 @@ defmodule Wymcp.Plugs.AuthTest do
         assert metadata.reason == "Invalid token"
         assert metadata.request_id == 42
         assert metadata.method == "tools/call"
+        assert metadata.http_method == "POST"
       after
         :telemetry.detach(handler_id)
       end
@@ -134,9 +142,117 @@ defmodule Wymcp.Plugs.AuthTest do
         assert metadata.auth_module == RaisingAuth
         assert metadata.exception == "RuntimeError"
         assert metadata.request_id == 42
+        assert metadata.http_method == "POST"
       after
         :telemetry.detach(handler_id)
       end
+    end
+  end
+
+  describe "error dialect" do
+    test "the default dialect keeps the JSON-RPC envelope" do
+      conn = build_conn(RejectingAuth) |> Auth.call([])
+
+      assert conn.status == 401
+      body = JSON.decode!(conn.resp_body)
+      assert body["error"]["code"] == -32600
+      assert body["error"]["data"]["error"] == "Invalid token"
+    end
+
+    test ":plain_json answers the flat plain-JSON error object" do
+      conn =
+        conn(:get, "/")
+        |> assign(:wymcp, auth: RejectingAuth)
+        |> Auth.call(Auth.init(error_dialect: :plain_json))
+
+      assert conn.status == 401
+      assert conn.halted
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+      assert JSON.decode!(conn.resp_body) == %{"error" => "Invalid token"}
+    end
+
+    @tag capture_log: true
+    test ":plain_json covers the rescue path" do
+      conn =
+        conn(:get, "/")
+        |> assign(:wymcp, auth: RaisingAuth)
+        |> Auth.call(Auth.init(error_dialect: :plain_json))
+
+      assert conn.status == 401
+      assert JSON.decode!(conn.resp_body) == %{"error" => "Authentication error"}
+    end
+
+    @tag capture_log: true
+    test "telemetry off POST carries http_method and nil request_id/method" do
+      ref = make_ref()
+      handler_id = "auth-dialect-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :auth, :reject],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn(:get, "/")
+        |> assign(:wymcp, auth: RejectingAuth)
+        |> Auth.call(Auth.init(error_dialect: :plain_json))
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.http_method == "GET"
+        assert metadata.request_id == nil
+        assert metadata.method == nil
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    @tag capture_log: true
+    test "the rescue path's telemetry off POST carries http_method and nil request_id/method" do
+      ref = make_ref()
+      handler_id = "auth-dialect-error-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:wymcp, :auth, :error],
+        fn _event, _measurements, metadata, _config ->
+          send(self(), {:telemetry, ref, metadata})
+        end,
+        nil
+      )
+
+      try do
+        conn(:get, "/")
+        |> assign(:wymcp, auth: RaisingAuth)
+        |> Auth.call(Auth.init(error_dialect: :plain_json))
+
+        assert_received {:telemetry, ^ref, metadata}
+        assert metadata.http_method == "GET"
+        assert metadata.request_id == nil
+        assert metadata.method == nil
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "a non-string reject reason renders identically in both dialects" do
+      json_rpc_conn = build_conn(AtomRejectingAuth) |> Auth.call([])
+
+      plain_json_conn =
+        conn(:get, "/")
+        |> assign(:wymcp, auth: AtomRejectingAuth)
+        |> Auth.call(Auth.init(error_dialect: :plain_json))
+
+      assert json_rpc_conn.status == 401
+      assert plain_json_conn.status == 401
+
+      assert JSON.decode!(json_rpc_conn.resp_body)["error"]["data"]["error"] ==
+               "invalid_token"
+
+      assert JSON.decode!(plain_json_conn.resp_body) == %{"error" => "invalid_token"}
     end
   end
 

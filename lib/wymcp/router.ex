@@ -82,20 +82,38 @@ defmodule Wymcp.Router do
     logged. These fields are merged with `name` and `version` from
     application config (optional).
 
-  POST requests run `Wymcp.Plugs.Pipeline`'s plug chain in order:
-  `Wymcp.Plugs.OriginCheck`, JSON body parsing, `Wymcp.Plugs.Classify`,
-  `Wymcp.Plugs.Auth`, `Wymcp.Plugs.Session`, `Wymcp.Plugs.Validate`,
-  `Wymcp.Plugs.Dispatch`.
+  Every non-fallthrough route — POST, GET (the SSE stream), DELETE — runs
+  both wire checks before the request touches any session state: the
+  origin check (`Wymcp.Plugs.OriginCheck`), then the auth check
+  (`Wymcp.Plugs.Auth`). This rule is the *wire-check invariant*, and its
+  ordering is load-bearing: 401/403 rejections win over the session
+  answers, so an unauthenticated caller learns nothing about session
+  existence — and a rejected request neither resets the session's idle
+  timer nor displaces its registered SSE stream. The fallthrough (any
+  other verb) runs no checks and touches nothing.
+
+  POST runs the checks as the first and fourth plugs of
+  `Wymcp.Plugs.Pipeline`'s chain: `Wymcp.Plugs.OriginCheck`, JSON body
+  parsing, `Wymcp.Plugs.Classify`, `Wymcp.Plugs.Auth`,
+  `Wymcp.Plugs.Session`, `Wymcp.Plugs.Validate`, `Wymcp.Plugs.Dispatch`.
+  GET and DELETE run the same two checks in the route body, before the
+  `Mcp-Session-Id` header is read. A wire check's rejection speaks the
+  error dialect of the route it runs on: the JSON-RPC dialect on POST,
+  the plain-JSON dialect (`%{error: message}`) on GET and DELETE — with
+  the 401 `WWW-Authenticate` challenge on every method.
 
   ```mermaid
   flowchart TD
       subgraph Router
           R[Wymcp.Router] --> POST["POST / → Pipeline"]
-          R --> GET["GET / → SSE stream"]
-          R --> DELETE["DELETE / → terminate"]
+          R --> WC["GET / DELETE / → wire checks"]
+          WC --> GET["GET / → SSE stream"]
+          WC --> DELETE["DELETE / → terminate"]
       end
       subgraph External
-          POST --> P[Plugs.Pipeline]
+          POST --> P["Plugs.Pipeline (wire checks inside)"]
+          WC --> OC[Plugs.OriginCheck]
+          WC --> AU[Plugs.Auth]
           GET --> S[Session]
           GET --> ST[Transport.Stream]
           DELETE --> S
@@ -108,10 +126,15 @@ defmodule Wymcp.Router do
   require Logger
 
   import Plug.Conn
+  import Wymcp.Response
 
-  alias Wymcp.Plugs.Pipeline
+  alias Wymcp.Plugs
   alias Wymcp.Session
   alias Wymcp.Transport
+
+  @origin_check_opts Plugs.OriginCheck.init(error_dialect: :plain_json)
+  @auth_check_opts Plugs.Auth.init(error_dialect: :plain_json)
+  @pipeline_opts Plugs.Pipeline.init([])
 
   plug(:match)
   plug(:dispatch)
@@ -217,9 +240,25 @@ defmodule Wymcp.Router do
     :ok
   end
 
-  post("/", do: Pipeline.call(conn, Pipeline.init([])))
+  post("/", do: Plugs.Pipeline.call(conn, @pipeline_opts))
 
   get "/" do
+    with_wire_checks(conn, &handle_get/1)
+  end
+
+  delete "/" do
+    with_wire_checks(conn, &handle_delete/1)
+  end
+
+  defp with_wire_checks(conn, handler) do
+    Plug.run(conn, [
+      &Plugs.OriginCheck.call(&1, @origin_check_opts),
+      &Plugs.Auth.call(&1, @auth_check_opts),
+      handler
+    ])
+  end
+
+  defp handle_get(conn) do
     case get_req_header(conn, "mcp-session-id") do
       [session_id] ->
         case Session.lookup(session_id) do
@@ -235,7 +274,7 @@ defmodule Wymcp.Router do
     end
   end
 
-  delete "/" do
+  defp handle_delete(conn) do
     case get_req_header(conn, "mcp-session-id") do
       [session_id] ->
         case Session.terminate_session(session_id) do
@@ -252,22 +291,15 @@ defmodule Wymcp.Router do
   end
 
   defp missing_session_header(conn) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(400, JSON.encode!(%{error: "Missing mcp-session-id header"}))
-    |> halt()
+    send_plain_error(conn, 400, "Missing mcp-session-id header")
   end
 
   defp duplicated_session_header(conn) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(
+    send_plain_error(
+      conn,
       400,
-      JSON.encode!(%{
-        error: "Duplicated Mcp-Session-Id header. Send exactly one Mcp-Session-Id header."
-      })
+      "Duplicated Mcp-Session-Id header. Send exactly one Mcp-Session-Id header."
     )
-    |> halt()
   end
 
   defp open_stream(conn, session_pid) do
@@ -286,10 +318,7 @@ defmodule Wymcp.Router do
   end
 
   defp session_not_found(conn) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(404, JSON.encode!(%{error: "Session not found"}))
-    |> halt()
+    send_plain_error(conn, 404, "Session not found")
   end
 
   match(_, do: send_resp(conn, 404, "Not found"))

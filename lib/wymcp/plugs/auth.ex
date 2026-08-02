@@ -13,8 +13,11 @@ defmodule Wymcp.Plugs.Auth do
   `:www_authenticate` option — see `Wymcp.Router`. If rendering the configured
   params raises (e.g. a misconfigured MFA), the challenge degrades to bare
   `Bearer` for that request and the error is logged naming the option — the
-  401 contract survives misconfiguration. The response body is a JSON-RPC
-  error with code -32600 (Invalid Request).
+  401 contract survives misconfiguration. The response body follows the
+  route's error dialect (the `:error_dialect` init option): a JSON-RPC error
+  with code -32600 (Invalid Request) on the default `:json_rpc` dialect — the
+  POST pipeline — or the plain-JSON `%{error: message}` object under
+  `:plain_json`, which the router's GET/DELETE wire-check call sites pass.
 
   ## Observability
 
@@ -28,9 +31,11 @@ defmodule Wymcp.Plugs.Auth do
     includes `auth_module`, `exception`, `error`, `request_id`, and
     `method`.
 
-  Both branches also emit a structured `Logger` line with the same
-  metadata so operators without a telemetry handler still get
-  attribution.
+  Both events carry `http_method` — the conn's HTTP verb (`"POST"`,
+  `"GET"`, `"DELETE"`). `request_id` and `method` come from the parsed
+  request body, so both are `nil` off POST. Both branches also emit a
+  structured `Logger` line with the same metadata so operators without a
+  telemetry handler still get attribution.
   """
 
   require Logger
@@ -45,24 +50,25 @@ defmodule Wymcp.Plugs.Auth do
   def init(opts), do: opts
 
   @impl Plug
-  def call(%Plug.Conn{} = conn, _opts) do
+  def call(%Plug.Conn{} = conn, opts) do
     auth_module = get_in(conn.assigns, [:wymcp, :auth]) || Wymcp.Auth.Noop
-    do_authenticate(conn, auth_module)
+    dialect = Keyword.get(opts, :error_dialect, :json_rpc)
+    do_authenticate(conn, auth_module, dialect)
   end
 
-  defp do_authenticate(conn, auth_module) do
+  defp do_authenticate(conn, auth_module, dialect) do
     case auth_module.authenticate(conn) do
       {:ok, conn} ->
         conn
 
       {:error, message} ->
         log_and_emit_reject(conn, auth_module, message)
-        send_unauthorized(conn, message)
+        send_unauthorized(conn, message, dialect)
     end
   rescue
     e ->
       log_and_emit_error(conn, auth_module, e, __STACKTRACE__)
-      send_unauthorized(conn, "Authentication error")
+      send_unauthorized(conn, "Authentication error", dialect)
   end
 
   defp log_and_emit_reject(conn, auth_module, reason) do
@@ -73,14 +79,16 @@ defmodule Wymcp.Plugs.Auth do
       auth_module: auth_module,
       reason: reason,
       request_id: request_id,
-      method: method
+      method: method,
+      http_method: conn.method
     })
 
     Logger.warning("MCP auth rejected: #{reason}",
       auth_module: inspect(auth_module),
       reason: reason,
       request_id: request_id,
-      method: method
+      method: method,
+      http_method: conn.method
     )
 
     :ok
@@ -96,7 +104,8 @@ defmodule Wymcp.Plugs.Auth do
       exception: exception_class,
       error: Exception.message(exception),
       request_id: request_id,
-      method: method
+      method: method,
+      http_method: conn.method
     })
 
     Logger.error("MCP auth raised: #{Exception.message(exception)}",
@@ -104,30 +113,37 @@ defmodule Wymcp.Plugs.Auth do
       exception: exception_class,
       request_id: request_id,
       method: method,
+      http_method: conn.method,
       crash_reason: {exception, stacktrace}
     )
 
     :ok
   end
 
-  defp send_unauthorized(conn, reason) do
-    request_id = request_field(conn, "id")
-    data = %{error: reason}
-    response = JsonRpc.error_response(:invalid_request, request_id, data)
-
+  defp send_unauthorized(conn, reason, dialect) do
     conn
     |> put_resp_header("www-authenticate", www_authenticate_value(conn))
+    |> send_rejection(reason, dialect)
+  end
+
+  defp send_rejection(conn, reason, :json_rpc) do
+    request_id = request_field(conn, "id")
+    response = JsonRpc.error_response(:invalid_request, request_id, %{error: reason})
+
+    conn
     |> put_status(401)
     |> send_json(response)
   end
+
+  defp send_rejection(conn, reason, :plain_json), do: send_plain_error(conn, 401, reason)
 
   # Bare `Bearer` unless the consumer configured auth-params via the router's
   # :www_authenticate option (see Wymcp.Router). MFA values are resolved per
   # request because consumers may only know them at runtime (Phoenix forward
   # options are evaluated at compile time).
   #
-  # Rendering is total: send_unauthorized/2 is called from inside
-  # do_authenticate/2's rescue, so a raising entry (a typo'd MFA past the
+  # Rendering is total: send_unauthorized/3 is called from inside
+  # do_authenticate/3's rescue, so a raising entry (a typo'd MFA past the
   # shape-only init validation, or an MFA returning a non-binary) would
   # otherwise escape as a 500 on every unauthenticated request — and the first
   # raise would emit [:wymcp, :auth, :error], misattributing the crash to the

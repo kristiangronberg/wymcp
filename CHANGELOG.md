@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered with an error, `nil` exactly when `is_error` is `false`. Telemetry metadata is a map, so a handler that
   does not read the key is unaffected. The key is `:stop`-only.
   See `Wymcp.Telemetry`.
+- `[:wymcp, :auth, :reject]` and `[:wymcp, :auth, :error]` metadata gains
+  `http_method` — the conn's HTTP verb (`"POST"`, `"GET"`, `"DELETE"`).
+  `request_id` and `method` are `nil` off POST, where no parsed body
+  exists; `http_method` is what distinguishes a GET/DELETE reject from a
+  POST reject whose body did not parse. Telemetry metadata is a map, so a
+  handler that does not read the key is unaffected. See `Wymcp.Telemetry`.
 
 ### Changed
 
@@ -75,6 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indistinguishable from an answered one. Accepted semantic change: a
   raise inside help now drops the help event; `[:wymcp, :tool, :error]`
   still records the call.
+- **BREAKING:** GET and DELETE now run both wire checks — the origin
+  check, then the auth check — before reading the `Mcp-Session-Id`
+  header; previously only POST ran them. With an `:auth` module
+  configured, unauthenticated GET (SSE) and DELETE requests answer 401
+  with the `WWW-Authenticate` challenge; with an `:origin` allowlist,
+  a disallowed or duplicated `Origin` header answers 403/400. Rejections
+  on GET/DELETE speak the routes' plain-JSON dialect (`{"error": "…"}`);
+  POST rejections keep the JSON-RPC envelope. MCP-conformant clients send
+  `Authorization` on every request, so conformant traffic is unaffected,
+  and servers with no `:auth`/`:origin` configured see no change. A
+  rejected request no longer touches the session: the idle timer is not
+  reset and the registered SSE stream is not displaced — possession of a
+  session ID alone no longer keeps a session alive or hijacks its stream.
 
 ### Fixed
 

@@ -15,10 +15,10 @@ defmodule Wymcp.Transport.StreamBanditTest do
   (ip: {127, 0, 0, 1}, port: 0) via start_supervised!/1 — the suite's
   first supervised fixture, used so ExUnit shuts the listener down
   deterministically — which keeps the module async: true. The bind
-  address is pinned rather than left to default: Wymcp.Router answers GET
-  and DELETE outside Plugs.Pipeline, so neither auth nor the Origin check
-  applies to them, and the wildcard bind a missing :ip produces would put
-  a live, unauthenticated MCP session on every interface for the test's
+  address is pinned rather than left to default: these fixtures mount the
+  router with no :auth or :origin configured, so every wire check passes
+  (Noop auth), and the wildcard bind a missing :ip produces would put a
+  live, unauthenticated MCP session on every interface for the test's
   duration. Sessions are created directly through
   Wymcp.Session.start_session/1: the HTTP handshake is not what this gate
   covers, and the sessions live in the same BEAM as the listener.

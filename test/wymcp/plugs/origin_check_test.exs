@@ -104,4 +104,45 @@ defmodule Wymcp.Plugs.OriginCheckTest do
       refute conn.halted
     end
   end
+
+  describe "error dialect" do
+    test "the default dialect keeps the JSON-RPC envelope" do
+      conn =
+        conn(:post, "/")
+        |> assign(:wymcp, origin: ["http://localhost:4000"])
+        |> put_req_header("origin", "http://evil.com")
+        |> OriginCheck.call(@opts)
+
+      assert conn.status == 403
+      assert JSON.decode!(conn.resp_body)["error"]["code"] == -32600
+    end
+
+    test ":plain_json answers the flat object on a disallowed origin" do
+      conn =
+        conn(:get, "/")
+        |> assign(:wymcp, origin: ["http://allowed.example"])
+        |> put_req_header("origin", "http://evil.example")
+        |> OriginCheck.call(OriginCheck.init(error_dialect: :plain_json))
+
+      assert conn.status == 403
+      assert conn.halted
+
+      assert JSON.decode!(conn.resp_body) ==
+               %{"error" => "Origin not allowed: http://evil.example"}
+    end
+
+    test ":plain_json answers the flat object on a duplicated Origin header" do
+      conn =
+        conn(:get, "/")
+        |> assign(:wymcp, origin: ["http://allowed.example"])
+        |> put_req_header("origin", "http://allowed.example")
+        |> prepend_req_headers([{"origin", "http://allowed.example"}])
+        |> OriginCheck.call(OriginCheck.init(error_dialect: :plain_json))
+
+      assert conn.status == 400
+
+      assert JSON.decode!(conn.resp_body) ==
+               %{"error" => "Duplicated Origin header. Send exactly one Origin header."}
+    end
+  end
 end

@@ -29,21 +29,27 @@ with domain-appropriate tunings noted inline).
 
 ## Architecture
 
-Request flow through the Plug pipeline:
+Request flow:
 
 ```
 POST /
-  → Wymcp.Router (Plug.Router, single POST route)
+  → Wymcp.Router (Plug.Router)
     → Wymcp.Plugs.Pipeline (Plug.Builder)
-      ├─ Plugs.OriginCheck (Origin allowlist — DNS rebinding protection)
+      ├─ Plugs.OriginCheck (wire check: Origin allowlist — DNS rebinding protection)
       ├─ parse_body (Plug.Parsers for JSON)
       ├─ Plugs.Classify (tags the JSON-RPC message kind: request / notification / response)
-      ├─ Plugs.Auth (Bearer token via Wymcp.Auth behaviour)
+      ├─ Plugs.Auth (wire check: Bearer token via Wymcp.Auth behaviour)
       ├─ Plugs.Session (Mcp-Session-Id lookup + MCP-Protocol-Version check)
       ├─ Plugs.Validate (MCP schema validation via JSV, compiled at build time from priv/schema.json)
       └─ Plugs.Dispatch (routes by "method" string)
           → Methods.Initialize | Methods.ToolsList | Methods.ToolsCall | Methods.Ping | ...
             → Wymcp.Response.send_json (JSON-RPC envelope, halts conn)
+
+GET / and DELETE /
+  → Wymcp.Router runs the same two wire checks first (Plugs.OriginCheck →
+    Plugs.Auth, rejections in the routes' plain-JSON dialect), then reads
+    Mcp-Session-Id → GET opens the SSE stream (Transport.Stream), DELETE
+    terminates the session
 ```
 
 **Key design decisions:**

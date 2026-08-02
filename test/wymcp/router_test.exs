@@ -107,6 +107,13 @@ defmodule Wymcp.RouterTest do
     def authenticate(_conn), do: raise("auth exploded")
   end
 
+  defmodule PassAuth do
+    @behaviour Wymcp.Auth
+
+    @impl Wymcp.Auth
+    def authenticate(conn), do: {:ok, conn}
+  end
+
   defmodule BadShapeRequiredTool do
     @behaviour Wymcp.Tool
 
@@ -936,6 +943,295 @@ defmodule Wymcp.RouterTest do
     end
   end
 
+  describe "wire checks (GET/DELETE)" do
+    test "unauthenticated GET answers 401 before the session-header read" do
+      opts = Wymcp.Router.init(tools: [TestTool], auth: FailAuth)
+
+      conn = conn(:get, "/") |> Wymcp.Router.call(opts)
+
+      assert conn.status == 401
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+      assert JSON.decode!(conn.resp_body) == %{"error" => "Unauthorized"}
+    end
+
+    test "unauthenticated DELETE answers 401 before the session-header read" do
+      opts = Wymcp.Router.init(tools: [TestTool], auth: FailAuth)
+
+      conn = conn(:delete, "/") |> Wymcp.Router.call(opts)
+
+      assert conn.status == 401
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+      assert JSON.decode!(conn.resp_body) == %{"error" => "Unauthorized"}
+    end
+
+    @tag doc: """
+         Pins the spec's "on every method" promise for the WWW-Authenticate
+         challenge: configured auth-params must render on the GET/DELETE 401s
+         too, not just POST's (pinned at the "401 WWW-Authenticate carries
+         configured auth-params" test in the authentication describe). The
+         params reach the plug through Router.init → copy_opts_to_assign, which
+         yields a keyword-list assign; a failure means with_wire_checks/2 or the
+         GET/DELETE assign plumbing dropped the option on those two routes only.
+         """
+    test "configured WWW-Authenticate auth-params render on the GET and DELETE 401s" do
+      opts =
+        Wymcp.Router.init(
+          tools: [TestTool],
+          auth: FailAuth,
+          www_authenticate: [scope: "mcp"]
+        )
+
+      get_conn = conn(:get, "/") |> Wymcp.Router.call(opts)
+      delete_conn = conn(:delete, "/") |> Wymcp.Router.call(opts)
+
+      assert get_conn.status == 401
+      assert delete_conn.status == 401
+      assert get_resp_header(get_conn, "www-authenticate") == [~s(Bearer scope="mcp")]
+      assert get_resp_header(delete_conn, "www-authenticate") == [~s(Bearer scope="mcp")]
+    end
+
+    test "unauthenticated GET with a valid session answers 401 and leaves the session alive" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool], auth: FailAuth)
+
+      task =
+        Task.async(fn ->
+          conn(:get, "/")
+          |> put_req_header("mcp-session-id", session_id)
+          |> Wymcp.Router.call(opts)
+        end)
+
+      conn =
+        case Task.yield(task, 2000) do
+          {:ok, result_conn} ->
+            result_conn
+
+          nil ->
+            Task.shutdown(task, :brutal_kill)
+            flunk("GET blocked — a stream opened instead of a wire-check rejection")
+        end
+
+      assert conn.status == 401
+      assert JSON.decode!(conn.resp_body) == %{"error" => "Unauthorized"}
+      assert {:ok, _pid} = Wymcp.Session.lookup(session_id)
+    end
+
+    test "unauthenticated DELETE with a valid session answers 401 and does not terminate it" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool], auth: FailAuth)
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 401
+      assert {:ok, _pid} = Wymcp.Session.lookup(session_id)
+    end
+
+    test "disallowed Origin on GET answers 403 in the plain-JSON dialect" do
+      opts = Wymcp.Router.init(tools: [TestTool], origin: ["http://allowed.example"])
+
+      conn =
+        conn(:get, "/")
+        |> put_req_header("origin", "http://evil.example")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 403
+
+      assert JSON.decode!(conn.resp_body) ==
+               %{"error" => "Origin not allowed: http://evil.example"}
+    end
+
+    test "disallowed Origin on DELETE answers 403 in the plain-JSON dialect" do
+      opts = Wymcp.Router.init(tools: [TestTool], origin: ["http://allowed.example"])
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("origin", "http://evil.example")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 403
+
+      assert JSON.decode!(conn.resp_body) ==
+               %{"error" => "Origin not allowed: http://evil.example"}
+    end
+
+    test "duplicated Origin header on GET answers 400 in the plain-JSON dialect" do
+      opts = Wymcp.Router.init(tools: [TestTool], origin: ["http://allowed.example"])
+
+      conn =
+        conn(:get, "/")
+        |> put_req_header("origin", "http://allowed.example")
+        |> prepend_req_headers([{"origin", "http://allowed.example"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["error"] =~ "Duplicated Origin"
+    end
+
+    test "duplicated Origin header on DELETE answers 400 in the plain-JSON dialect" do
+      opts = Wymcp.Router.init(tools: [TestTool], origin: ["http://allowed.example"])
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("origin", "http://allowed.example")
+        |> prepend_req_headers([{"origin", "http://allowed.example"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["error"] =~ "Duplicated Origin"
+    end
+
+    test "the origin check runs before the auth check" do
+      opts =
+        Wymcp.Router.init(
+          tools: [TestTool],
+          auth: FailAuth,
+          origin: ["http://allowed.example"]
+        )
+
+      conn =
+        conn(:get, "/")
+        |> put_req_header("origin", "http://evil.example")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 403
+    end
+
+    test "a passing auth module lets GET and DELETE proceed to the session answers" do
+      opts = Wymcp.Router.init(tools: [TestTool], auth: PassAuth)
+
+      get_conn =
+        conn(:get, "/")
+        |> put_req_header("mcp-session-id", "bogus")
+        |> Wymcp.Router.call(opts)
+
+      delete_conn =
+        conn(:delete, "/")
+        |> put_req_header("mcp-session-id", "bogus")
+        |> Wymcp.Router.call(opts)
+
+      assert get_conn.status == 404
+      assert delete_conn.status == 404
+    end
+
+    @tag doc: """
+         Guards the pre-wire-check hole where an unauthenticated GET reset the
+         session's idle timer (Session.touch/1 ran before any check), so a
+         leaked session ID kept a session alive indefinitely. A failure means
+         a rejected request is touching the session again — check the
+         wire-check placement in the GET/DELETE route bodies first.
+         """
+    test "a rejected GET does not reset the session's idle timer" do
+      # start_link/1 with a caller-chosen id, NOT start_session/1: a supervised
+      # session is a :permanent child, so Wymcp.Session.Supervisor restarts it
+      # on the {:shutdown, :session_expired} exit this test waits for and
+      # lookup/1 would answer {:ok, a-new-pid} (probe evidence in the plan's
+      # Grounding). Outside the supervisor the process still registers under
+      # session_id, so lookup/1 and the router's mcp-session-id path behave
+      # identically, and no cleanup is needed — the 400 ms timer ends it even
+      # if this test fails early. trap_exit keeps the linked session's
+      # non-:normal exit from killing the test process and turns it into the
+      # {:EXIT, …} message the final assertion reads.
+      Process.flag(:trap_exit, true)
+      session_id = "wire-check-idle-timer-pin"
+
+      {:ok, pid} =
+        Wymcp.Session.start_link(
+          {session_id, Wymcp.Testing.build_session_opts(session_idle_timeout: 400)}
+        )
+
+      opts = Wymcp.Router.init(tools: [TestTool], auth: FailAuth)
+
+      Process.sleep(250)
+
+      task =
+        Task.async(fn ->
+          conn(:get, "/")
+          |> put_req_header("mcp-session-id", session_id)
+          |> Wymcp.Router.call(opts)
+        end)
+
+      conn =
+        case Task.yield(task, 2000) do
+          {:ok, result_conn} ->
+            result_conn
+
+          nil ->
+            Task.shutdown(task, :brutal_kill)
+            flunk("GET blocked — a stream opened instead of a wire-check rejection")
+        end
+
+      assert conn.status == 401
+
+      # The session must still be alive at rejection time — if the 250 ms
+      # sleep overran the 400 ms timeout under load, the test would
+      # otherwise pass without testing anything; failing here instead
+      # signals "widen the margins" (see the plan's timing note).
+      assert {:ok, _} = Wymcp.Session.lookup(session_id)
+
+      # An untouched timer expires the session ~400 ms after creation, so
+      # the trapped exit arrives well inside this 300 ms window; a touched
+      # one would fire at ~650 ms, outside it.
+      assert_receive {:EXIT, ^pid, {:shutdown, :session_expired}}, 300
+    end
+
+    @tag doc: """
+         Guards the displacement hole: an unauthenticated GET with a leaked
+         session ID could register itself as the session's stream, kicking
+         the legitimate client off its SSE connection. A failure means a
+         rejected GET reached Session.register_stream/2.
+         """
+    test "a rejected GET does not displace the session's registered stream" do
+      session_id = initialize()
+      test_pid = self()
+
+      legit =
+        Task.async(fn ->
+          result_conn =
+            conn(:get, "/")
+            |> put_req_header("mcp-session-id", session_id)
+            |> Wymcp.Router.call(Wymcp.Router.init(tools: [TestTool]))
+
+          send(test_pid, {:stream_done, result_conn})
+          result_conn
+        end)
+
+      # Give the legitimate stream time to register
+      Process.sleep(100)
+
+      rejected =
+        Task.async(fn ->
+          conn(:get, "/")
+          |> put_req_header("mcp-session-id", session_id)
+          |> Wymcp.Router.call(Wymcp.Router.init(tools: [TestTool], auth: FailAuth))
+        end)
+
+      rejected_conn =
+        case Task.yield(rejected, 2000) do
+          {:ok, result_conn} ->
+            result_conn
+
+          nil ->
+            Task.shutdown(rejected, :brutal_kill)
+            flunk("GET blocked — a stream opened instead of a wire-check rejection")
+        end
+
+      assert rejected_conn.status == 401
+
+      # The legitimate stream must still be the session's registered
+      # stream — displacement would have swapped the registered pid to
+      # the rejected GET's process.
+      assert Wymcp.Session.get_state(session_id).stream_pid == legit.pid
+
+      Wymcp.Session.terminate_session(session_id)
+      assert_receive {:stream_done, legit_conn}, 2000
+      assert legit_conn.status == 200
+      Task.await(legit, 1000)
+    end
+  end
+
   describe "init/1 :www_authenticate validation" do
     test "raises when the option is not a keyword list" do
       assert_raise ArgumentError, ~r/www_authenticate/, fn ->
@@ -1015,8 +1311,8 @@ defmodule Wymcp.RouterTest do
     @tag doc: """
          get_req_header/2 returns every value of a repeated header — the old
          single-element case head crashed with CaseClauseError (a 500) on a
-         duplicated Mcp-Session-Id. The GET/DELETE routes answer in their
-         plain-JSON register, not JSON-RPC: no JSON-RPC request exists on
+         duplicated Mcp-Session-Id. The GET/DELETE routes answer in the
+         plain-JSON dialect, not JSON-RPC: no JSON-RPC request exists on
          these verbs.
          """
     test "returns 400 when the mcp-session-id header is duplicated" do

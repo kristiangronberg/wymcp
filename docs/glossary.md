@@ -95,6 +95,9 @@ check, run in that order.
 _Avoid_: wire-level guard, guard (for rejecting plugs), gate (for
 rejecting plugs)
 
+**wire-check invariant**
+`Wymcp.Router`
+
 ## Grandfathered (pending define)
 
 Swept from the existing code and docs on 2026-07-05 (glossary bootstrap).
