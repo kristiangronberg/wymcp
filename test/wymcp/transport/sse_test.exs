@@ -3,26 +3,21 @@ defmodule Wymcp.Transport.SSETest do
 
   alias Wymcp.Transport.SSE
 
-  describe "encode/2" do
-    test "encodes a JSON-RPC message as an SSE event with ID" do
-      message = %{"jsonrpc" => "2.0", "id" => 1, "result" => %{}}
-      event = SSE.encode(message, "evt-1")
-
-      assert event == "id: evt-1\ndata: #{JSON.encode!(message)}\n\n"
+  describe "frame/2" do
+    test "frames pre-encoded JSON as an SSE event with ID" do
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "id" => 1, "result" => %{}})
+      assert SSE.frame(json, "evt-1") == "id: evt-1\ndata: #{json}\n\n"
     end
 
-    test "encodes without ID when nil" do
-      message = %{"jsonrpc" => "2.0", "method" => "notifications/progress"}
-      event = SSE.encode(message, nil)
-
-      assert event == "data: #{JSON.encode!(message)}\n\n"
+    test "frames without ID when nil" do
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "notifications/progress"})
+      assert SSE.frame(json, nil) == "data: #{json}\n\n"
     end
   end
 
-  describe "encode_empty/1" do
-    test "encodes an empty priming event with ID" do
-      event = SSE.encode_empty("stream-1")
-      assert event == "id: stream-1\ndata: \n\n"
+  describe "frame_empty/1" do
+    test "frames an empty priming event with ID" do
+      assert SSE.frame_empty("stream-1") == "id: stream-1\ndata: \n\n"
     end
   end
 end

@@ -1,10 +1,15 @@
 defmodule Wymcp.Transport.SSE do
   @moduledoc """
-  Pure SSE event encoding.
+  Pure SSE event framing.
 
-  Formats JSON-RPC messages as Server-Sent Events per the MCP Streamable
-  HTTP transport specification. No process state, no side effects — just
-  string formatting.
+  Formats pre-encoded JSON-RPC payloads as Server-Sent Events per the MCP
+  Streamable HTTP transport specification. No process state, no side
+  effects — just string formatting. JSON encoding happens at the push
+  entries (`Wymcp.Session.push/3`, `Wymcp.Session.await_client_response/4`)
+  in the pusher's own process; by the time a payload reaches this module it
+  is a JSON binary, which cannot contain a raw newline (`JSON` escapes
+  control characters) — so the SSE `data:` line cannot be broken by
+  content, by construction rather than by an unenforced precondition.
 
   ## SSE Format
 
@@ -14,19 +19,18 @@ defmodule Wymcp.Transport.SSE do
       id: <event-id>
       data: <json>
 
-  Messages must not contain embedded newlines. Events are separated by
-  a blank line (`\\n\\n`).
+  Events are separated by a blank line (`\\n\\n`).
   """
 
-  def encode(message, nil) do
-    "data: #{JSON.encode!(message)}\n\n"
+  def frame(json, nil) when is_binary(json) do
+    "data: #{json}\n\n"
   end
 
-  def encode(message, event_id) do
-    "id: #{event_id}\ndata: #{JSON.encode!(message)}\n\n"
+  def frame(json, event_id) when is_binary(json) do
+    "id: #{event_id}\ndata: #{json}\n\n"
   end
 
-  def encode_empty(event_id) do
+  def frame_empty(event_id) do
     "id: #{event_id}\ndata: \n\n"
   end
 end

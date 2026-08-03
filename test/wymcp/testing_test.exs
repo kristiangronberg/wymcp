@@ -28,10 +28,18 @@ defmodule Wymcp.TestingTest do
     test "optional Session.init keys enter the map only when passed" do
       refute Map.has_key?(Testing.build_session_opts(), :server)
       refute Map.has_key?(Testing.build_session_opts(), :session_idle_timeout)
+      refute Map.has_key?(Testing.build_session_opts(), :ack_window)
 
-      opts = Testing.build_session_opts(server: SomeServer, session_idle_timeout: 50)
+      opts =
+        Testing.build_session_opts(
+          server: SomeServer,
+          session_idle_timeout: 50,
+          ack_window: 50
+        )
+
       assert opts.server == SomeServer
       assert opts.session_idle_timeout == 50
+      assert opts.ack_window == 50
     end
 
     test "the default map starts a real session" do

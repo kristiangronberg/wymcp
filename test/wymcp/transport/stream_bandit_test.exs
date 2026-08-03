@@ -42,10 +42,10 @@ defmodule Wymcp.Transport.StreamBanditTest do
   alias Wymcp.Session
   alias Wymcp.Testing
 
-  # An order of magnitude under Transport.Stream.push_timeout/0 (5 000 ms)
-  # and three orders above a loopback round trip: it separates "answered
-  # by the loop" from "waited out the push timeout" without being a
-  # wall-clock race.
+  # An order of magnitude under the plain-push bound (the pusher's own
+  # GenServer.call default, 5 000 ms) and three orders above a loopback
+  # round trip: it separates "answered by the loop" from "waited out the
+  # caller's timeout" without being a wall-clock race.
   @prompt_push_ms 500
 
   test "the priming event reaches the client over a real socket" do
@@ -120,7 +120,7 @@ defmodule Wymcp.Transport.StreamBanditTest do
        serving the connection, so the session's stream monitor need never
        fire. Two things must hold and only a real socket shows them —
        every push answers promptly (a stale registration makes a push
-       wait out Transport.Stream.push_timeout/0 against a mailbox nobody
+       wait out its caller's full call timeout against a mailbox nobody
        drains), and the registration is cleared. The branch logic itself
        is unit-tested with stand-in adapters in stream_test.exs; what
        this proves is that the real adapter reports the failure at all.
@@ -173,9 +173,9 @@ defmodule Wymcp.Transport.StreamBanditTest do
   # {:error, :no_stream} is a legitimate ending too: if the connection
   # process happens to die outright, the session's monitor clears the
   # registration before any write is attempted. A push that wedges past
-  # the session's own call timeout exits instead of returning — also a
-  # failure of this test, just reported as an exit naming Wymcp.Session
-  # rather than as the assertion below.
+  # the caller's call timeout answers
+  # {:error, :timeout} — also a failure of this test, reported by the
+  # flunk below.
   defp push_until_gone(_session_pid, 0) do
     flunk("the stream never reported the disconnect over 10 pushes")
   end

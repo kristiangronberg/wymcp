@@ -1124,24 +1124,14 @@ defmodule Wymcp.RouterTest do
          wire-check placement in the GET/DELETE route bodies first.
          """
     test "a rejected GET does not reset the session's idle timer" do
-      # start_link/1 with a caller-chosen id, NOT start_session/1: a supervised
-      # session is a :permanent child, so Wymcp.Session.Supervisor restarts it
-      # on the {:shutdown, :session_expired} exit this test waits for and
-      # lookup/1 would answer {:ok, a-new-pid} (probe evidence in the plan's
-      # Grounding). Outside the supervisor the process still registers under
-      # session_id, so lookup/1 and the router's mcp-session-id path behave
-      # identically, and no cleanup is needed — the 400 ms timer ends it even
-      # if this test fails early. trap_exit keeps the linked session's
-      # non-:normal exit from killing the test process and turns it into the
-      # {:EXIT, …} message the final assertion reads.
-      Process.flag(:trap_exit, true)
-      session_id = "wire-check-idle-timer-pin"
+      # Supervised startup is safe now that sessions are restart: :temporary
+      # (this test previously pinned Session.start_link/1 to dodge the
+      # :permanent restart of the expiry it waits for). The monitor
+      # replaces the old link+trap_exit arrangement.
+      {:ok, pid, session_id} =
+        Wymcp.Session.start_session(Wymcp.Testing.build_session_opts(session_idle_timeout: 400))
 
-      {:ok, pid} =
-        Wymcp.Session.start_link(
-          {session_id, Wymcp.Testing.build_session_opts(session_idle_timeout: 400)}
-        )
-
+      ref = Process.monitor(pid)
       opts = Wymcp.Router.init(tools: [TestTool], auth: FailAuth)
 
       Process.sleep(250)
@@ -1168,13 +1158,13 @@ defmodule Wymcp.RouterTest do
       # The session must still be alive at rejection time — if the 250 ms
       # sleep overran the 400 ms timeout under load, the test would
       # otherwise pass without testing anything; failing here instead
-      # signals "widen the margins" (see the plan's timing note).
+      # signals "widen the margins".
       assert {:ok, _} = Wymcp.Session.lookup(session_id)
 
       # An untouched timer expires the session ~400 ms after creation, so
-      # the trapped exit arrives well inside this 300 ms window; a touched
-      # one would fire at ~650 ms, outside it.
-      assert_receive {:EXIT, ^pid, {:shutdown, :session_expired}}, 300
+      # the :DOWN arrives well inside this 300 ms window; a touched one
+      # would fire at ~650 ms, outside it.
+      assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :session_expired}}, 300
     end
 
     @tag doc: """

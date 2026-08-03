@@ -74,7 +74,7 @@ The initial empty SSE event a new stream sends, giving the client an
 event ID for reconnection.
 
 **push**
-`Wymcp.Transport.Stream.push/2`
+`Wymcp.Session.push/3`
 _Avoid_: push event, push_event
 
 **push ack**
@@ -93,6 +93,9 @@ makes: the session pushes the request over SSE, holds the calling process,
 and unblocks it when the client POSTs the response back
 (`await_client_response` → `deliver_response`).
 _Avoid_: deferred reply
+
+**session**
+`Wymcp.Session`
 
 **session opts**
 `Wymcp.Testing.build_session_opts/1`
@@ -160,7 +163,6 @@ end collect the synonym sets that span entries.
 
 ### Session & lifecycle
 
-- **session** — one client connection's state (negotiated version, capabilities, tools, assigns, log level, pending requests) held in a GenServer; created at initialize, ended by DELETE, disconnect, or idle timeout. (`Wymcp.Session`)
 - **session ID** (`Mcp-Session-Id`) — 32-byte URL-safe base64 identifier carried in the header; unknown IDs are rejected with 404 + `-32001`. (`Wymcp.Session`, `Wymcp.Plugs.Session`)
 - **session status** (`:initializing` / `:ready`) — session lifecycle states; `notifications/initialized` marks ready. **Overloaded:** the protocol schema's `TaskStatus` is an unrelated state machine sharing the word. (`Wymcp.Session.State`)
 - **lifecycle gate** — the plug check rejecting non-exempt methods while a session is `:initializing`. (`Wymcp.Plugs.Session`)

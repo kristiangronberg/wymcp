@@ -107,8 +107,8 @@ Reference: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 ## 3. Client Features (server → client requests)
 
 These are requests the **server sends to the client** via the SSE channel. The
-session's deferred-reply mechanism (`Session.await_client_response/4`) pushes a
-JSON-RPC request via SSE, blocks the caller, and unblocks when the client POSTs
+session's server-request round trip (`Session.await_client_response/4`) pushes a
+JSON-RPC request via SSE, holds the caller, and unblocks it when the client POSTs
 back a response. `Plugs.Classify` tags incoming responses so they bypass
 validation and route to `Methods.DeliverResponse`.
 
@@ -126,7 +126,7 @@ validation and route to `Methods.DeliverResponse`.
 
 | Feature                                | Spec                                 | wymcp status                                              |
 |----------------------------------------|--------------------------------------|-----------------------------------------------------------|
-| `elicitation/create` — form mode       | Client capability `elicitation.form` | ✅ `Context.elicit/3` — sends JSON Schema, blocks for response |
+| `elicitation/create` — form mode       | Client capability `elicitation.form` | ✅ `Context.elicit/4` — sends JSON Schema, blocks for response |
 | Capability negotiation                 | Part of init                         | ⚠️ See note below                                        |
 | `mode` field in request                | Defaults to `"form"` if omitted      | ⚠️ See note below                                        |
 | Sensitive-info constraint              | MUST NOT use form mode               | ⚠️ Not enforced or documented for tool authors            |
@@ -154,7 +154,7 @@ validation and route to `Methods.DeliverResponse`.
 >    use form mode for sensitive information. URL mode MUST be used for
 >    sensitive interactions like credentials."* This is not enforced in code
 >    (nor could it easily be), but should be documented as guidance for tool
->    authors using `Context.elicit/3`.
+>    authors using `Context.elicit/4`.
 
 ### 3.3 Roots (server asks client for filesystem boundaries)
 
@@ -244,8 +244,8 @@ validation and route to `Methods.DeliverResponse`.
 - Auth behaviour with Bearer token support and `WWW-Authenticate` header
 - Cancellation: `notifications/cancelled` with request tracking
 - Sampling: `Context.sample/3` — server asks client's LLM mid-tool-execution
-- Elicitation: `Context.elicit/3` — server asks human for structured form input (see §3.2 notes for spec gaps)
-- Deferred reply mechanism: `Session.await_client_response/4` + `deliver_response/3`
+- Elicitation: `Context.elicit/4` — server asks human for structured form input (see §3.2 notes for spec gaps)
+- Server-request round trip: `Session.await_client_response/4` + `deliver_response/3`
 - Progress tracking: `Context.progress_token/1` + `Context.report_progress/4`
 - Logging: `logging/setLevel` method + `Context.log/3` with level filtering
 - Telemetry events for session lifecycle

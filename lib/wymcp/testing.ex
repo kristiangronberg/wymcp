@@ -42,15 +42,18 @@ defmodule Wymcp.Testing do
   @doc """
   Builds the opts map `Wymcp.Session.init/1` requires — the session opts:
   `protocol_version`, `client_capabilities`, `client_info`, `tools`, and
-  `auth`, plus the optional `server` and `session_idle_timeout`.
+  `auth`, plus the optional `server`, `session_idle_timeout`, and
+  `ack_window`.
 
   Every required key has a test-appropriate default; pass keyword
   overrides for the ones a test cares about. `protocol_version` defaults to
   `Wymcp.ProtocolVersion.latest/0`, so a session built here negotiates at
-  whatever revision the library currently leads with. The two optional keys
-  enter the map only when passed — `Wymcp.Session.init/1` applies its own
-  defaults to their absence (`session_idle_timeout` in particular must be
-  absent, not nil, to get the default).
+  whatever revision the library currently leads with. The three optional
+  keys enter the map only when passed — `Wymcp.Session.init/1` applies its
+  own defaults to their absence (`session_idle_timeout` and `ack_window` in
+  particular must be absent, not nil, to get theirs). `ack_window` is a
+  test-only knob for the push-ack clock and may only *shrink* it:
+  `Wymcp.Session.init/1` refuses a value above its own default.
 
   Callers keep their own start call: the same map serves
   `Wymcp.Session.start_session/1` and

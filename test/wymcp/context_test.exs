@@ -1,6 +1,8 @@
 defmodule Wymcp.ContextTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Wymcp.{Context, Session, Testing}
 
   describe "text/1" do
@@ -133,6 +135,15 @@ defmodule Wymcp.ContextTest do
 
       assert :ok = Context.report_progress(ctx, 1)
     end
+
+    test "stays :ok on a dead session" do
+      {ctx, _stream_pid} = build_session_context(%{})
+      :ok = Session.terminate_session(ctx.session_id)
+      refute Process.alive?(ctx.session_pid)
+
+      ctx = %{ctx | meta: %{"progressToken" => "tok-dead"}}
+      assert :ok = Context.report_progress(ctx, 1)
+    end
   end
 
   describe "log/3" do
@@ -204,6 +215,32 @@ defmodule Wymcp.ContextTest do
       ctx = %Context{session_pid: nil, session_id: nil, request_id: 1, assigns: %{}}
       assert :ok = Context.log(ctx, "info", "test")
     end
+
+    @tag doc: """
+         Context.log keeps its always-:ok contract even for a payload JSON
+         cannot encode — the discarded {:error, :unencodable} makes the
+         Logger.warning the ONLY signal for this surface (spec D6). A
+         failure on the capture assertion means that warning was lost.
+         """
+    test "stays :ok for an unencodable payload and warns" do
+      {ctx, stream_pid} = build_session_context(%{})
+
+      log =
+        capture_log(fn ->
+          assert :ok = Context.log(ctx, "info", %{"pid" => self()})
+        end)
+
+      assert log =~ "not JSON-encodable"
+      Process.exit(stream_pid, :normal)
+    end
+
+    test "stays :ok on a dead session" do
+      {ctx, _stream_pid} = build_session_context(%{})
+      :ok = Session.terminate_session(ctx.session_id)
+      refute Process.alive?(ctx.session_pid)
+
+      assert :ok = Context.log(ctx, "info", "after death")
+    end
   end
 
   describe "sample/3" do
@@ -266,11 +303,36 @@ defmodule Wymcp.ContextTest do
       ctx = %Context{session_pid: nil, session_id: nil, request_id: 1, assigns: %{}}
       assert {:error, :no_session} = Context.sample(ctx, "test", %{})
     end
+
+    test "answers {:error, :unencodable} for options JSON cannot encode" do
+      {ctx, stream_pid} = build_session_context(%{"sampling" => %{}})
+
+      assert {:error, :unencodable} =
+               Context.sample(ctx, "hi", %{"bad" => {:tuple, :val}, :timeout => 100})
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         D4's totality promise at the consumer surface: the capability
+         check's get_state call exits on a dead session, and under
+         restart: :temporary dead sessions are the NORMAL end state — the
+         catch turns the exit into the same {:error, :no_session} a nil
+         session pid answers. A failure means Context push functions can
+         exit again.
+         """
+    test "answers {:error, :no_session} on a dead session" do
+      {ctx, _stream_pid} = build_session_context(%{"sampling" => %{}})
+      :ok = Session.terminate_session(ctx.session_id)
+      refute Process.alive?(ctx.session_pid)
+
+      assert {:error, :no_session} = Context.sample(ctx, "hi")
+    end
   end
 
-  describe "elicit/3" do
+  describe "elicit/4" do
     @tag doc: """
-         Context.elicit/3 pushes an elicitation/create request (form mode)
+         Context.elicit/4 pushes an elicitation/create request (form mode)
          via SSE and blocks until the user responds. The schema defines
          what form fields the client should render.
          """
@@ -285,7 +347,7 @@ defmodule Wymcp.ContextTest do
         "required" => ["branch"]
       }
 
-      # elicit/3 blocks, so run it in a task
+      # elicit/4 blocks, so run it in a task
       elicit_task =
         Task.async(fn ->
           Context.elicit(ctx, "Which branch?", schema)
@@ -316,6 +378,26 @@ defmodule Wymcp.ContextTest do
     test "returns {:error, :no_session} when session_pid is nil" do
       ctx = %Context{session_pid: nil, session_id: nil, request_id: 1, assigns: %{}}
       assert {:error, :no_session} = Context.elicit(ctx, "test", %{})
+    end
+
+    test "answers {:error, :unencodable} for a schema JSON cannot encode" do
+      {ctx, stream_pid} = build_session_context(%{"elicitation" => %{}})
+
+      schema = %{"type" => "object", "properties" => %{"bad" => make_ref()}}
+
+      assert {:error, :unencodable} =
+               Context.elicit(ctx, "Which?", schema, %{:timeout => 100})
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    test "answers {:error, :no_session} on a dead session" do
+      {ctx, _stream_pid} = build_session_context(%{"elicitation" => %{}})
+      :ok = Session.terminate_session(ctx.session_id)
+      refute Process.alive?(ctx.session_pid)
+
+      schema = %{"type" => "object", "properties" => %{}}
+      assert {:error, :no_session} = Context.elicit(ctx, "Which?", schema)
     end
   end
 
@@ -389,10 +471,17 @@ defmodule Wymcp.ContextTest do
 
   defp fake_stream_loop(test_pid) do
     receive do
-      {:push, ref, message} ->
-        send(test_pid, {:fake_stream_push, message})
-        send(ref, {ref, :ok})
+      {:push, reply_to, json} ->
+        send(test_pid, {:fake_stream_push, JSON.decode!(json)})
+        answer_fake_push(reply_to, :ok)
         fake_stream_loop(test_pid)
     end
   end
+
+  defp answer_fake_push({:caller, from}, result), do: GenServer.reply(from, result)
+
+  defp answer_fake_push({:ack, session_pid, tag}, result),
+    do: send(session_pid, {:push_ack, tag, result})
+
+  defp answer_fake_push(:none, _result), do: :ok
 end

@@ -385,12 +385,13 @@ suitable for `:telemetry_metrics`.
 [`Wymcp.Session`](lib/wymcp/session.ex) is the GenServer that holds state for a
 single MCP session: the negotiated protocol version, client and server
 capabilities, server config, and per-session assigns. A session is created
-during the `initialize` handshake and lives until the client disconnects, sends
-DELETE, or the configurable idle timer expires (default 30 minutes). Each
-session is its own GenServer rather than an ETS row because sampling and
-elicitation require a coordination point between the SSE stream process and
-spawned tool tasks. Session IDs are 32-byte URL-safe base64 strings that
-satisfy the MCP requirement of visible ASCII characters only.
+during the `initialize` handshake and ends at DELETE, idle timeout (default
+30 minutes), or crash; an ended session is never restarted — the client gets
+a 404 and re-initializes. Each session is its own GenServer rather than an
+ETS row because sampling and elicitation require a coordination point between
+the SSE stream process and the pushing request processes. Session IDs are
+32-byte URL-safe base64 strings that satisfy the MCP requirement of visible
+ASCII characters only.
 
 [`Wymcp.JsonRpc`](lib/wymcp/json_rpc.ex) handles JSON-RPC 2.0 envelope
 construction and MCP protocol schema validation. It compiles the MCP JSON Schema
@@ -410,20 +411,23 @@ is sent.
 connection for one session, run as a receive loop by the GET request process
 that owns its socket. It registers with the session before the 200 commits —
 a session that died in that window gets a clean 404 — then sends the priming
-event and serves pushes and keepalives from the loop. The Session reaches it
-only through the module's public API (`push/3`, `replace/1`); every chunk
-write happens in the request process, the ownership rule real adapters
-(Bandit) enforce. The stream and Session monitor each other — if either
-process dies, the other cleans up — and because a request process can
-outlive the stream it ran, a stream that ends on a failed write clears its
-own registration (`Wymcp.Session.unregister_stream/2`) rather than waiting
-for a monitor that will not fire. A new GET replaces the old stream: only
-one active SSE stream per session.
+event and serves pushes and keepalives from the loop. Pushes are
+stream-answered: the Session hands each pre-encoded payload and a reply
+address to the loop (`push/3`) and never blocks on the write; the loop
+answers the pusher with the push ack. Every chunk write happens in the
+request process, the ownership rule real adapters (Bandit) enforce. The
+stream and Session monitor each other — if either process dies, the other
+cleans up — and because a request process can outlive the stream it ran, a
+stream that ends on a failed write clears its own registration
+(`Wymcp.Session.unregister_stream/2`) rather than waiting for a monitor that
+will not fire. A new GET replaces the old stream: only one active SSE stream
+per session.
 
-[`Wymcp.Transport.SSE`](lib/wymcp/transport/sse.ex) is pure SSE event encoding
+[`Wymcp.Transport.SSE`](lib/wymcp/transport/sse.ex) is pure SSE event framing
 per the MCP Streamable HTTP transport specification. No process state, no side
-effects — just string formatting that turns a JSON-RPC message and optional
-event id into the `id: …\ndata: …\n\n` wire format.
+effects — just string formatting that turns a pre-encoded JSON payload and
+optional event id into the `id: …\ndata: …\n\n` wire format; JSON encoding
+itself happens at the push entries, in the pusher's own process.
 
 [`Wymcp.Testing`](lib/wymcp/testing.ex) provides test helpers for
 consuming applications. Functions like `text_response/1`, `json_response/1`, and

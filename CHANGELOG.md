@@ -15,9 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not reach the session's stream monitor; without this a vanished client
   would leave a registration behind and every later push would wait out
   the push timeout.
-- `Wymcp.Transport.Stream.push_timeout/0` publishes the push call's
-  timeout so callers can size their own `GenServer.call` timeouts above
-  it.
+- `{:error, :unencodable}`: push payloads are JSON-encoded in the pusher's
+  own process at the two public entries (`Wymcp.Session.push/3`,
+  `Wymcp.Session.await_client_response/4`); a payload `JSON` cannot encode
+  answers `{:error, :unencodable}` synchronously — with a truncated
+  `Logger.warning` naming the session — instead of raising inside the
+  stream and ending it. The stream only ever writes pre-validated JSON
+  (`Wymcp.Transport.SSE` keeps only the framing). `Wymcp.Context.log/4`
+  and `report_progress/4` keep their always-`:ok` contract; the warning is
+  their only signal.
+- `{:error, :no_session}`: `Wymcp.Session.push/3` and
+  `await_client_response/4` — and therefore `Wymcp.Context.sample/3` /
+  `elicit/4`, whose docs now carry the full result vocabulary — answer a
+  tuple instead of exiting when the session is dead. A caller-side call
+  exit reads `{:timeout, _}` as `{:error, :timeout}` and everything else
+  as `{:error, :no_session}`.
 - `[:wymcp, :tool, :stop]` metadata gains
   `error_kind: :dispatch | :tool | nil` — `:dispatch` when a gate
   rejected the call before the action handler ran (wymcp's dispatch gate,
@@ -42,19 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start (`attach/2`) and its `{:error, :gone}` return.
   `Transport.Stream`'s old conn-write helpers (`open/1`, `push/3`,
   `push_empty/2`, `push_keepalive/1`) are no longer public; the module's
-  API is `serve/3`, `push/3`, `replace/1`, and `push_timeout/0`.
+  API is `serve/3`, `push/3`, and `replace/1`.
 - **BREAKING:** `Wymcp.Session.push_event/2` is renamed to
-  `Wymcp.Session.push/2`.
+  `Wymcp.Session.push/3`.
 - **BREAKING:** `Wymcp.Session.register_stream/2` no longer accepts `nil`
   ("pass nil to explicitly clear the stream"). Clearing is the stream
   monitor's and `unregister_stream/2`'s job now. The function guards
   `is_pid/1`, so a `nil` call fails at the caller instead of reaching —
   and crashing — the session process.
-- **BREAKING:** push error vocabulary: `{:error, :stream_down}` (the
-  stream died before replying) and `{:error, :timeout}` (no reply within
-  the 5 s push timeout) are new; `{:error, :no_stream}` now means exactly
-  "this session has no stream" — the registered-but-not-attached case
-  died with the attach phase; `{:error, :disconnected}` is unchanged.
+- **BREAKING:** push error vocabulary: `{:error, :no_stream}` means exactly
+  "this session has no stream"; `{:error, :disconnected}` — the chunk
+  write failed (or the stream closed with the push still queued);
+  `{:error, :timeout}` — no push ack within the caller's own call timeout
+  on a plain push, or, on the sampling/elicitation push leg, within the
+  session's private ~5 s ack window; `{:error, :stream_down}` — the stream
+  died while a sampling/elicitation push awaited its ack (a plain push
+  against a crashed stream surfaces as `{:error, :timeout}` instead).
 - **BREAKING:** `run/2` return contract: five paths that returned
   `{:error, message}` now return `{:error, message, :dispatch}` — the four
   `Wymcp.Tool.dispatch/4` gate branches (`unknown_action`,
@@ -69,12 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{:error, message, :dispatch | :tool}` is now documented contract, so a
   hand-written `run/2` can classify its own gate rejections. See
   `Wymcp.Tool`.
-- `Wymcp.Session.push/2`, `register_tool/2`, `unregister_tool/2`, and
-  `register_stream/2` now call with a timeout above the push timeout
-  instead of the 5 000 ms default, and `await_client_response/4` sizes its
-  call above both its own `timeout` and the push timeout. At equal
-  timeouts a wedged stream exits the caller with `:timeout` before the
-  push's own `{:error, :timeout}` can be returned.
+- **BREAKING:** pushes are stream-answered — the session hands the
+  pre-encoded payload and the pusher's reply reference to the stream loop
+  and never blocks on a socket write; the loop answers the pusher directly
+  (plain push) or acks the session (the sampling/elicitation push leg,
+  a small ack state machine). `Wymcp.Transport.Stream.push_timeout/0` is
+  gone — with no blocking push there is no outer timeout to size above —
+  and every session call uses `GenServer.call/3`'s bare default.
+  `register_tool/2`/`unregister_tool/2` no longer block on the
+  list-changed notification.
 - `[:wymcp, :help, :called]` now emits after the answer is resolved, and
   its metadata gains `is_error: boolean()` — a failed probe (unknown
   tool, unknown action, action without tool) is no longer
@@ -104,6 +122,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   happen in the request process. Plug.Test has no such owner check, which
   is why the suite never saw it; a Bandit-backed regression test now
   covers the real-socket path.
+- Sessions run with `restart: :temporary`. Under the previous `:permanent`
+  default the supervisor restarted every ended session under the same
+  session id: an idle-expired session came back live-but-fresh (the idle
+  timeout never converged access to closed — an abandoned session leaked a
+  process forever), and a crashed session came back `:initializing` with
+  empty assigns instead of a clean 404. An ended session — DELETE, idle
+  timeout, or crash — is now simply gone: `lookup/1` answers
+  `{:error, :not_found}`, the wire answers 404 + `-32001`, the client
+  re-initializes.
 
 ## [0.9.0]
 

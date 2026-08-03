@@ -59,9 +59,10 @@ defmodule Wymcp.Context do
       C->>S: check_capability
       S-->>C: :ok
       C->>S: await_client_response(request_id, message, timeout)
-      S->>ST: push request via SSE
+      S->>ST: push request (ack to session)
       ST->>CL: SSE event
-      Note over S: Caller blocked (deferred reply)
+      ST-->>S: push ack
+      Note over S: caller held (server-request round trip)
       CL->>S: POST response (deliver_response)
       S-->>C: {:ok, result}
       C-->>T: {:ok, result}
@@ -187,14 +188,17 @@ defmodule Wymcp.Context do
   end
 
   defp should_log?(pid, level) do
-    state = Wymcp.Session.get_state(pid)
-
-    case state.log_level do
-      nil ->
+    case fetch_state(pid) do
+      {:ok, %{log_level: nil}} ->
         true
 
-      threshold ->
+      {:ok, %{log_level: threshold}} ->
         Map.get(@log_level_order, level, 0) >= Map.get(@log_level_order, threshold, 0)
+
+      {:error, _reason} ->
+        # An unreachable session means nothing to push — log keeps its
+        # always-:ok contract (consistent with the nil-session head).
+        false
     end
   end
 
@@ -214,9 +218,27 @@ defmodule Wymcp.Context do
   - `"systemPrompt"` (string)
   - `"temperature"` (float)
 
-  Returns `{:error, :not_supported}` if the client did not declare
-  `sampling` capability. Returns `{:error, :no_session}` if called
-  outside a session (e.g. in a unit test with nil session_pid).
+  Returns the client's `{:ok, result}` or `{:error, error_map}` (the
+  client answered with a JSON-RPC error), or one of these tuples — the
+  full vocabulary:
+
+  - `{:error, :not_supported}` — the client did not declare the
+    `sampling` capability.
+  - `{:error, :no_session}` — no session (`session_pid` is nil), or a
+    dead one: sessions end at DELETE, idle timeout, or crash and are
+    never restarted, and this surface answers values, never exits.
+  - `{:error, :unencodable}` — `prompt`/`opts` produced a request `JSON`
+    cannot encode; answered synchronously in the calling process, with a
+    `Logger.warning` naming the session.
+  - `{:error, :no_stream}` — the session has no registered SSE stream.
+  - `{:error, :disconnected}` — the stream's chunk write failed; the
+    client is gone.
+  - `{:error, :stream_down}` — the stream process died before
+    acknowledging the push.
+  - `{:error, :timeout}` — the push-leg ack window (~5 s) expired (a
+    wedged stream), or the client never answered within the sampling
+    timeout; a `:timeout` arriving only after the full timeout means the
+    request was delivered.
   """
   def sample(ctx, prompt, opts \\ %{})
 
@@ -253,17 +275,23 @@ defmodule Wymcp.Context do
   @doc """
   Asks the human user for structured input mid-tool-execution (form mode).
 
-  Pushes an `elicitation/create` request to the client via the SSE
-  stream and blocks until the user responds. The client renders a form
-  based on the JSON Schema and returns typed, validated data.
+  Pushes an `elicitation/create` request to the client via the SSE stream
+  and blocks until the user responds. The client renders a form based on
+  the JSON Schema and returns typed, validated data.
 
   The `schema` must be a flat JSON Schema object (primitive properties
   only, no nested objects). The client renders appropriate UI controls
   for each field type.
 
-  The response includes an `"action"` field: `"accept"` (user submitted),
-  `"decline"` (user refused), or `"cancel"` (user dismissed). When
-  action is `"accept"`, `"content"` contains the validated form data.
+  On `{:ok, response}` the response includes an `"action"` field:
+  `"accept"` (user submitted), `"decline"` (user refused), or `"cancel"`
+  (user dismissed). When action is `"accept"`, `"content"` contains the
+  validated form data. The error vocabulary is `Wymcp.Context.sample/3`'s,
+  in full — `:not_supported` (client lacks the `elicitation` capability,
+  or the negotiated protocol version predates elicitation), `:no_session`,
+  `:unencodable` (the `schema` is the usual offender), `:no_stream`,
+  `:disconnected`, `:stream_down`, and the two-sense `:timeout` — plus
+  `{:error, error_map}` when the client answers with a JSON-RPC error.
   """
   def elicit(ctx, message, schema, opts \\ %{})
 
@@ -292,28 +320,42 @@ defmodule Wymcp.Context do
   end
 
   defp check_capability(pid, capability) do
-    state = Wymcp.Session.get_state(pid)
-
-    if Map.has_key?(state.client_capabilities, capability) do
-      :ok
-    else
-      {:error, :not_supported}
+    with {:ok, state} <- fetch_state(pid) do
+      if Map.has_key?(state.client_capabilities, capability) do
+        :ok
+      else
+        {:error, :not_supported}
+      end
     end
   end
 
   defp check_elicitation_supported(pid) do
-    state = Wymcp.Session.get_state(pid)
+    with {:ok, state} <- fetch_state(pid) do
+      cond do
+        not Wymcp.ProtocolVersion.supports_elicitation?(state.protocol_version) ->
+          {:error, :not_supported}
 
-    cond do
-      not Wymcp.ProtocolVersion.supports_elicitation?(state.protocol_version) ->
-        {:error, :not_supported}
+        not Map.has_key?(state.client_capabilities, "elicitation") ->
+          {:error, :not_supported}
 
-      not Map.has_key?(state.client_capabilities, "elicitation") ->
-        {:error, :not_supported}
-
-      true ->
-        :ok
+        true ->
+          :ok
+      end
     end
+  end
+
+  # The one non-total session call these surfaces make: get_state/1 exits
+  # on a dead session, and under restart: :temporary a dead session is a
+  # normal end state mid-tool-run. Made total here, once, so no caller
+  # needs a function-wide catch — sample/elicit propagate the tuple
+  # through their with-chains, should_log?/2 maps it to false. The split
+  # mirrors Wymcp.Session's call_session/3 (D4): the caller's own timeout
+  # is the one exit that does not mean "gone".
+  defp fetch_state(pid) do
+    {:ok, Wymcp.Session.get_state(pid)}
+  catch
+    :exit, {:timeout, _call} -> {:error, :timeout}
+    :exit, _reason -> {:error, :no_session}
   end
 
   defp generate_request_id do

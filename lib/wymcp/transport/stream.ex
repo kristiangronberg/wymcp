@@ -28,24 +28,25 @@ defmodule Wymcp.Transport.Stream do
   the stream is not ending this process: the request process belongs to the
   adapter, which may keep it alive for the connection's next request, so no
   `:DOWN` reaches `Wymcp.Session`'s stream monitor and a registration left
-  behind would make every later push wait out `push_timeout/0` before
-  answering. Every failed write therefore goes through one funnel that
+  behind would make every later push wait out its caller's own call timeout
+  before answering. Every failed write therefore goes through one funnel that
   tells the session (`Wymcp.Session.unregister_stream/2`, a cast — the
-  session may itself be blocked in the very push whose write just failed)
+  loop must never wait on the session)
   and then closes. Replacement and session death need no such message: the
   session already holds the successor's pid in the first case and is gone
   in the second.
 
   The session reaches the loop only through this module's public API.
-  `push/3` is a hand-rolled monitor+alias call — the same mechanism
-  `GenServer.call/3` uses — so a caller always gets an answer: `:ok`,
-  `{:error, :disconnected}`, `{:error, :stream_down}`, or `{:error,
-  :timeout}`. `replace/1` is a plain send: asking, never killing, because
-  the loop's process is serving a committed 200. The loop ends with a
-  catch-all clause that drops unknown messages at debug level — it must
-  never crash on a stray, and strays exist by construction (Plug.Test's
-  adapter notifies the conn owner; ThousandIsland's read timer can fire
-  mid-callback).
+  `push/3` is a stream-answered push: the session hands the pre-encoded
+  payload and a reply address to the loop and never blocks on the write —
+  the loop answers the address with the push ack (`answer_push/2`): the
+  pusher directly on a plain push, the session on a server-request round
+  trip's push leg, nobody for a list-changed notification. `replace/1` is a
+  plain send: asking, never killing, because the loop's process is serving
+  a committed 200. The loop ends with a catch-all clause that drops unknown
+  messages at debug level — it must never crash on a stray, and strays
+  exist by construction (Plug.Test's adapter notifies the conn owner;
+  ThousandIsland's read timer can fire mid-callback).
 
   ```mermaid
   sequenceDiagram
@@ -64,8 +65,9 @@ defmodule Wymcp.Transport.Stream do
           Router-->>Client: 404 (pre-commit)
       else registered
           Stream-->>Client: 200 chunked, priming event, keepalives
-          Session->>Stream: push / replace
+          Session->>Stream: push(json, reply_to) / replace
           Stream-->>Client: SSE events
+          Note over Stream: answers reply_to with the push ack
           Stream-->>Router: final conn (stream ended)
       end
   ```
@@ -129,29 +131,16 @@ defmodule Wymcp.Transport.Stream do
           optional(:keepalive_interval) => pos_integer()
         }
 
-  @default_keepalive_interval :timer.seconds(15)
+  @typedoc """
+  Who awaits one push — the address the loop answers with the push ack.
+  """
+  @type reply_to :: {:caller, GenServer.from()} | {:ack, pid(), term()} | :none
 
-  # A push reply is only the socket write's acknowledgement. A chunk write
-  # can legitimately block on TCP backpressure from a slow-but-alive
-  # client, so multi-second is deliberate — a fail-fast value would kill
-  # healthy streams under load. Only tests override it, via push/3's
-  # argument.
-  @push_timeout :timer.seconds(5)
+  @default_keepalive_interval :timer.seconds(15)
 
   # Single owner of the event-id grammar; minted by event_id/1, parsed by
   # resume_counter/1 — change all three together or reconnects resume from 0.
   @event_id_prefix "evt-"
-
-  @doc """
-  The push call's timeout in milliseconds.
-
-  Published because a `GenServer.call` that performs a push must outlive
-  the push it performs: at equal timeouts the outer call expires first —
-  its clock starts earlier — and the caller exits `:timeout` instead of
-  receiving the `{:error, :timeout}` this module answers with.
-  `Wymcp.Session` sizes its own call timeouts from this value.
-  """
-  def push_timeout, do: @push_timeout
 
   @doc """
   Runs the SSE stream for `session_pid` in the calling process — the GET
@@ -182,35 +171,24 @@ defmodule Wymcp.Transport.Stream do
   end
 
   @doc """
-  Sends a JSON-RPC message to the client over the stream.
+  Hands one pre-encoded push to the stream loop — a stream-answered push:
+  the caller never blocks here; the loop answers `reply_to` with the push
+  ack after the chunk write.
 
-  Callers normally reach this through `Wymcp.Session.push/2`. The reply
-  vocabulary, in full: `:ok` — written; `{:error, :disconnected}` — the
-  chunk write failed and the stream is closing; `{:error, :stream_down}` —
-  the stream died before replying; `{:error, :timeout}` — no reply within
-  `timeout`, which defaults to `push_timeout/0` (a wedged stream;
-  `t:serve_opts/0` does not configure this, the argument does, and only
-  tests pass it). A push sent in the gap between registration and loop
-  entry queues in the loop's mailbox and is answered after the priming
-  event.
+  `{:caller, from}` answers a `GenServer.call`er directly via
+  `GenServer.reply/2` (`Wymcp.Session` forwards the pusher's own `from`, so
+  a late ack is dropped by the caller's reply alias); `{:ack, session_pid,
+  tag}` sends `{:push_ack, tag, result}` to the session — the server-request
+  round trip's push leg; `:none` expects no answer (list-changed
+  notifications). The ack vocabulary: `:ok` — written; `{:error,
+  :disconnected}` — the chunk write failed and the stream is closing, or
+  the push was still queued when the stream closed (the close drain answers
+  it). A push sent in the gap between registration and loop entry queues in
+  the loop's mailbox and is answered after the priming event.
   """
-  def push(stream_pid, message, timeout \\ @push_timeout) when is_pid(stream_pid) do
-    ref = Process.monitor(stream_pid, alias: :reply_demonitor)
-    send(stream_pid, {:push, ref, message})
-
-    receive do
-      {^ref, result} ->
-        result
-
-      {:DOWN, ^ref, :process, ^stream_pid, _reason} ->
-        {:error, :stream_down}
-    after
-      timeout ->
-        # Deactivates the alias too, so a late reply is dropped by the
-        # runtime instead of polluting the caller's mailbox.
-        Process.demonitor(ref, [:flush])
-        {:error, :timeout}
-    end
+  def push(stream_pid, json, reply_to) when is_pid(stream_pid) and is_binary(json) do
+    send(stream_pid, {:push, reply_to, json})
+    :ok
   end
 
   @doc """
@@ -299,8 +277,8 @@ defmodule Wymcp.Transport.Stream do
 
   defp loop(%State{session_monitor: session_monitor} = state) do
     receive do
-      {:push, ref, message} ->
-        handle_push(state, ref, message)
+      {:push, reply_to, json} ->
+        handle_push(state, reply_to, json)
 
       :keepalive ->
         handle_keepalive(state)
@@ -344,21 +322,31 @@ defmodule Wymcp.Transport.Stream do
     end
   end
 
-  defp handle_push(state, ref, message) do
+  defp handle_push(state, reply_to, json) do
     event_id = event_id(state.event_counter + 1)
 
-    case write(state.conn, message, event_id) do
+    case write(state.conn, json, event_id) do
       {:ok, conn} ->
-        send(ref, {ref, :ok})
+        answer_push(reply_to, :ok)
         loop(%{state | conn: conn, event_counter: state.event_counter + 1})
 
       {:error, reason} ->
-        # Answer the caller first: it is blocked on this reply, and
+        # Answer first: a plain pusher is blocked on this ack, and
         # disconnect/2 talks to the session before returning.
-        send(ref, {ref, {:error, :disconnected}})
+        answer_push(reply_to, {:error, :disconnected})
         disconnect(state, "push (#{inspect(reason)})")
     end
   end
+
+  # The push ack goes to whoever awaits the push: the pusher directly on a
+  # plain push, the session on a server-request round trip's push leg,
+  # nobody for a fire-and-forget notification.
+  defp answer_push({:caller, from}, result), do: GenServer.reply(from, result)
+
+  defp answer_push({:ack, session_pid, tag}, result),
+    do: send(session_pid, {:push_ack, tag, result})
+
+  defp answer_push(:none, _result), do: :ok
 
   defp handle_keepalive(state) do
     case write_keepalive(state.conn) do
@@ -374,12 +362,11 @@ defmodule Wymcp.Transport.Stream do
   # Every failed write ends here. Ending the stream is not ending this
   # process — it is the adapter's connection process and may serve the
   # connection's next request — so the session's stream monitor never
-  # fires and the registration would go stale, costing every later push a
-  # full push_timeout/0 wait against a mailbox nobody drains. A cast, not
-  # a call: the session may be blocked in the very push whose write just
-  # failed, and the loop must not wait on it. A pid the session no longer
-  # has registered is ignored on its side, so a replacement that raced
-  # this message keeps its registration.
+  # fires and the registration would go stale, costing every later plain
+  # push its caller's full call timeout against a mailbox nobody drains. A
+  # cast, not a call: the loop must never wait on the session. A pid the
+  # session no longer has registered is ignored on its side, so a
+  # replacement that raced this message keeps its registration.
   defp disconnect(state, what) do
     Logger.debug("SSE stream closing: #{what} write failed, client disconnected")
     Session.unregister_stream(state.session_pid, self())
@@ -422,8 +409,8 @@ defmodule Wymcp.Transport.Stream do
   # priming write that fails with a push already dispatched into the gap.
   defp drain_pushes do
     receive do
-      {:push, ref, _message} ->
-        send(ref, {ref, {:error, :disconnected}})
+      {:push, reply_to, _json} ->
+        answer_push(reply_to, {:error, :disconnected})
         drain_pushes()
     after
       0 -> :ok
@@ -447,9 +434,9 @@ defmodule Wymcp.Transport.Stream do
 
   # -- Conn writes (only the loop and the priming path call these) --
 
-  defp write(conn, message, event_id), do: chunk(conn, SSE.encode(message, event_id))
+  defp write(conn, json, event_id), do: chunk(conn, SSE.frame(json, event_id))
 
-  defp write_empty(conn, event_id), do: chunk(conn, SSE.encode_empty(event_id))
+  defp write_empty(conn, event_id), do: chunk(conn, SSE.frame_empty(event_id))
 
   defp write_keepalive(conn), do: chunk(conn, ":keepalive\n\n")
 

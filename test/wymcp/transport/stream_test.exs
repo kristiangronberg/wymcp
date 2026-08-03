@@ -267,12 +267,15 @@ defmodule Wymcp.Transport.StreamTest do
   end
 
   describe "push/3" do
-    test "writes the message as an SSE event and answers :ok" do
+    test "writes the payload and answers a {:caller, from} reply_to via GenServer.reply" do
       session_pid = start_session()
       task = serve_task(session_pid, [], @quiet_keepalive)
       stream_pid = wait_for_stream(session_pid)
 
-      assert :ok = Stream.push(stream_pid, %{"jsonrpc" => "2.0", "method" => "test"})
+      ref = make_ref()
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "test"})
+      assert :ok = Stream.push(stream_pid, json, {:caller, {self(), ref}})
+      assert_receive {^ref, :ok}, 1000
 
       :ok = Stream.replace(stream_pid)
       assert {:ok, conn} = Task.await(task)
@@ -281,31 +284,41 @@ defmodule Wymcp.Transport.StreamTest do
     end
 
     @tag doc: """
-         The caller-safety half of the call protocol: a stream that died
-         before replying answers {:error, :stream_down} through the
-         caller's monitor — never an exit, never a hang. This is the
-         module API's "other side is dead" answer, replacing the one the
-         deleted GenServer design gave its callers (D4).
+         The server-request round trip's push leg: an {:ack, session, tag}
+         reply_to must come back as a {:push_ack, tag, result} message —
+         the shape the session's ack state machine handles by name. A
+         failure means the loop and the session no longer agree on the
+         ack protocol.
          """
-    test "answers {:error, :stream_down} when the stream died before replying" do
-      dead = spawn(fn -> :ok end)
-      ref = Process.monitor(dead)
-      assert_receive {:DOWN, ^ref, :process, ^dead, _reason}
+    test "answers an {:ack, session, tag} reply_to with a {:push_ack, tag, result} message" do
+      session_pid = start_session()
+      task = serve_task(session_pid, [], @quiet_keepalive)
+      stream_pid = wait_for_stream(session_pid)
 
-      assert {:error, :stream_down} = Stream.push(dead, %{"jsonrpc" => "2.0"})
+      tag = {"srv-1", make_ref()}
+
+      json =
+        JSON.encode!(%{"jsonrpc" => "2.0", "id" => "srv-1", "method" => "sampling/createMessage"})
+
+      assert :ok = Stream.push(stream_pid, json, {:ack, self(), tag})
+      assert_receive {:push_ack, ^tag, :ok}, 1000
+
+      :ok = Stream.replace(stream_pid)
+      assert {:ok, conn} = Task.await(task)
+      assert conn.resp_body =~ ~s("method":"sampling/createMessage")
     end
 
-    @tag doc: """
-         The explicit push timeout (D3): a wedged stream answers
-         {:error, :timeout} instead of blocking the caller forever. The
-         stand-in is a process that never replies; the timeout is
-         shortened through push/3's third argument — the only place it is
-         ever overridden.
-         """
-    test "answers {:error, :timeout} when the stream does not reply in time" do
-      wedged = spawn(fn -> Process.sleep(:infinity) end)
+    test "a :none reply_to writes without expecting an answer" do
+      session_pid = start_session()
+      task = serve_task(session_pid, [], @quiet_keepalive)
+      stream_pid = wait_for_stream(session_pid)
 
-      assert {:error, :timeout} = Stream.push(wedged, %{"jsonrpc" => "2.0"}, 50)
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "notifications/tools/list_changed"})
+      assert :ok = Stream.push(stream_pid, json, :none)
+
+      :ok = Stream.replace(stream_pid)
+      assert {:ok, conn} = Task.await(task)
+      assert conn.resp_body =~ ~s("method":"notifications/tools/list_changed")
     end
   end
 
@@ -359,16 +372,19 @@ defmodule Wymcp.Transport.StreamTest do
          the stream, so no :DOWN ever reaches the Session's stream
          monitor. The failing write is the whole signal, and the loop has
          to relay it. A failure of the last assertion means a vanished
-         client leaves stream_pid registered and every later push pays
-         Transport.Stream.push_timeout/0 before answering.
+         client leaves stream_pid registered and every later plain push
+         waits out its caller's full call timeout against a mailbox nobody
+         drains.
          """
     test "a failed push answers {:error, :disconnected} and clears the registration" do
       session_pid = start_session()
       task = serve_task(session_pid, [], @quiet_keepalive, VanishingSocket)
       stream_pid = wait_for_stream(session_pid)
 
-      assert {:error, :disconnected} =
-               Stream.push(stream_pid, %{"jsonrpc" => "2.0", "method" => "test"})
+      ref = make_ref()
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "test"})
+      :ok = Stream.push(stream_pid, json, {:caller, {self(), ref}})
+      assert_receive {^ref, {:error, :disconnected}}, 1000
 
       assert {:ok, conn} = Task.await(task)
       assert conn.resp_body == "id: evt-1\ndata: \n\n"
@@ -413,16 +429,19 @@ defmodule Wymcp.Transport.StreamTest do
          push/3's @doc promises a push queued in the registration→loop-entry
          gap is answered. When the priming write fails the loop is never
          entered, so the answer has to come from the close path's drain —
-         without it the queued push waits out the full push timeout and
-         answers {:error, :timeout} for a client that is provably gone.
+         without it the queued push waits out its caller's full call
+         timeout and answers {:error, :timeout} for a client that is
+         provably gone.
          """
     test "a push queued during a failed priming write is answered {:error, :disconnected}" do
       session_pid = start_session()
       task = serve_task(session_pid, [], @quiet_keepalive, StallingClosedSocket)
       stream_pid = wait_for_stream(session_pid)
 
-      assert {:error, :disconnected} =
-               Stream.push(stream_pid, %{"jsonrpc" => "2.0", "method" => "test"})
+      ref = make_ref()
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "test"})
+      :ok = Stream.push(stream_pid, json, {:caller, {self(), ref}})
+      assert_receive {^ref, {:error, :disconnected}}, 1000
 
       assert {:ok, conn} = Task.await(task)
       assert conn.resp_body == ""
@@ -446,7 +465,10 @@ defmodule Wymcp.Transport.StreamTest do
       send(stream_pid, {:unexpected, :garbage})
       send(stream_pid, :read_timeout)
 
-      assert :ok = Stream.push(stream_pid, %{"jsonrpc" => "2.0", "method" => "still-alive"})
+      ref = make_ref()
+      json = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "still-alive"})
+      assert :ok = Stream.push(stream_pid, json, {:caller, {self(), ref}})
+      assert_receive {^ref, :ok}, 1000
 
       :ok = Stream.replace(stream_pid)
       assert {:ok, conn} = Task.await(task)

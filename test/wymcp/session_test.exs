@@ -203,24 +203,17 @@ defmodule Wymcp.SessionTest do
 
   describe "session idle timeout" do
     test "session terminates after idle timeout" do
-      Process.flag(:trap_exit, true)
-
-      {:ok, pid} =
-        Session.start_link(
-          {"test-timeout-1", Testing.build_session_opts(session_idle_timeout: 50)}
-        )
+      {:ok, pid, _session_id} =
+        Session.start_session(Testing.build_session_opts(session_idle_timeout: 50))
 
       ref = Process.monitor(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :session_expired}}, 200
+      assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :session_expired}}, 500
     end
 
     test "activity resets the idle timer" do
-      {:ok, pid} =
-        Session.start_link(
-          {"test-touch-1", Testing.build_session_opts(session_idle_timeout: 100)}
-        )
+      {:ok, pid, _session_id} =
+        Session.start_session(Testing.build_session_opts(session_idle_timeout: 100))
 
-      # Touch session before timeout
       Process.sleep(60)
       Session.touch(pid)
       Process.sleep(60)
@@ -580,20 +573,23 @@ defmodule Wymcp.SessionTest do
     end
 
     @tag doc: """
-         In-band clearing: {:error, :disconnected} is the session's own
-         authoritative answer, ordered ahead of the loop's unregister
-         cast, so the registration must already be gone when the reply
-         returns — pushes queued behind this call answer {:error,
-         :no_stream} immediately instead of each waiting out the push
-         timeout against a process that left the loop but stayed alive.
+         A disconnected answer reaches the pusher directly (the loop
+         answers the forwarded reply reference), and the registration
+         clears through the loop's unregister_stream cast — the session
+         never routes push acks anymore, so in-band clearing is gone
+         with the blocking push. A failure means one of the two halves of
+         the disconnect contract broke.
          """
-    test "push/2 clears the registration in-band on {:error, :disconnected}" do
+    test "a disconnected push answers the pusher and the loop's cast clears the registration" do
       {:ok, pid, _id} = start_session()
+      test_pid = self()
 
       stream_pid =
         spawn(fn ->
           receive do
-            {:push, ref, _message} -> send(ref, {ref, {:error, :disconnected}})
+            {:push, reply_to, _json} ->
+              send(test_pid, {:got_push, self()})
+              answer_fake_push(reply_to, {:error, :disconnected})
           end
 
           Process.sleep(:infinity)
@@ -601,7 +597,11 @@ defmodule Wymcp.SessionTest do
 
       :ok = Session.register_stream(pid, stream_pid)
       assert {:error, :disconnected} = Session.push(pid, %{"jsonrpc" => "2.0"})
+      assert_received {:got_push, ^stream_pid}
 
+      # The real loop casts unregister_stream from its disconnect funnel;
+      # the fake does it here, after the answer, like the real ordering.
+      :ok = Session.unregister_stream(pid, stream_pid)
       assert Session.get_state(pid).stream_pid == nil
       assert Session.get_state(pid).stream_monitor_ref == nil
     end
@@ -625,19 +625,19 @@ defmodule Wymcp.SessionTest do
       assert state.stream_pid == nil
     end
 
-    test "push/2 returns {:error, :no_stream} when no stream registered" do
+    test "push/3 returns {:error, :no_stream} when no stream registered" do
       {:ok, pid, _id} = start_session()
       assert {:error, :no_stream} = Session.push(pid, %{"test" => true})
     end
 
     @tag doc: """
-         push/2 delegates to the stream process through
-         Transport.Stream.push/2's monitor+alias protocol. We test with a
-         fake stream speaking that protocol, since a real stream requires
-         a Plug.Conn. A failure here means the session is not forwarding
-         to the stream pid correctly.
+         push/3 hands the pre-encoded payload and the caller's reply
+         reference to the stream (a stream-answered push); the fake stream
+         answers the reference the way the real loop does. A failure here
+         means the session is no longer forwarding to the stream pid, or
+         the reply reference no longer reaches it.
          """
-    test "push/2 sends the message to the stream process" do
+    test "push/3 sends the message to the stream process" do
       {:ok, pid, _id} = start_session()
 
       test_pid = self()
@@ -645,9 +645,9 @@ defmodule Wymcp.SessionTest do
       stream_pid =
         spawn(fn ->
           receive do
-            {:push, ref, message} ->
-              send(ref, {ref, :ok})
-              send(test_pid, {:pushed, message})
+            {:push, reply_to, json} ->
+              answer_fake_push(reply_to, :ok)
+              send(test_pid, {:pushed, JSON.decode!(json)})
           end
 
           Process.sleep(:infinity)
@@ -657,11 +657,50 @@ defmodule Wymcp.SessionTest do
       assert :ok = Session.push(pid, %{"jsonrpc" => "2.0", "method" => "test"})
       assert_receive {:pushed, %{"jsonrpc" => "2.0", "method" => "test"}}, 1000
     end
+
+    @tag doc: """
+         The encode boundary: a payload JSON cannot encode must be refused
+         in the pusher's own process, before any session state changes —
+         previously the raise happened inside the stream loop and killed a
+         healthy stream. A failure means encoding drifted back past the
+         public entry.
+         """
+    test "push/3 answers {:error, :unencodable} for a payload JSON cannot encode" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn_fake_stream(pid)
+
+      assert {:error, :unencodable} = Session.push(pid, %{"data" => {:tuple, :val}})
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         The I2 degradation, pinned: a stream that never acks (wedged, or
+         crashed without draining) costs the pusher its own call timeout,
+         answered as a tuple by the entry's exit catch — never an exit.
+         The timeout is shortened through push/3's third argument, the
+         only place it is ever overridden.
+         """
+    test "push/3 answers {:error, :timeout} when the stream never acks" do
+      {:ok, pid, _id} = start_session()
+      wedged = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = Session.register_stream(pid, wedged)
+
+      assert {:error, :timeout} = Session.push(pid, %{"jsonrpc" => "2.0"}, 50)
+    end
+
+    test "push/3 answers {:error, :no_session} on a dead session" do
+      {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts())
+      :ok = Session.terminate_session(session_id)
+      refute Process.alive?(pid)
+
+      assert {:error, :no_session} = Session.push(pid, %{"jsonrpc" => "2.0"})
+    end
   end
 
   describe "await_client_response/4 and deliver_response/3" do
     @tag doc: """
-         The core deferred-reply cycle: await_client_response pushes a
+         The core server-request round trip: await_client_response pushes a
          message via SSE and blocks the caller. deliver_response unblocks
          it with the client's answer. This is the mechanism that makes
          sampling and elicitation work. A failure here means tools cannot
@@ -775,6 +814,261 @@ defmodule Wymcp.SessionTest do
     end
   end
 
+  describe "await_client_response/4 ack state machine" do
+    @tag doc: """
+         D3's two clocks, the fast one: a stream that never acks answers
+         {:error, :timeout} within the ack window (~50 ms here via the
+         :ack_window test opt), not after the transport clock or the
+         client clock. A failure on the elapsed assertion means the ack
+         window stopped bounding the push leg.
+         """
+    test "answers {:error, :timeout} from the ack window when the stream never acks" do
+      {:ok, pid, _id} =
+        Session.start_session(
+          Testing.build_session_opts(client_capabilities: %{"sampling" => %{}}, ack_window: 50)
+        )
+
+      Session.mark_ready(pid)
+      swallowing = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = Session.register_stream(pid, swallowing)
+      message = %{"jsonrpc" => "2.0", "id" => "srv-ack-1", "method" => "sampling/createMessage"}
+
+      {elapsed_us, result} =
+        :timer.tc(fn -> Session.await_client_response(pid, "srv-ack-1", message, 30_000) end)
+
+      assert {:error, :timeout} = result
+      assert elapsed_us < 1_000_000
+      assert Session.get_state(pid).pending_server_requests == %{}
+    end
+
+    test "an error ack answers the caller immediately" do
+      {:ok, pid, _id} = start_ready_session()
+      test_pid = self()
+
+      stream_pid =
+        spawn(fn ->
+          receive do
+            {:push, reply_to, _json} ->
+              answer_fake_push(reply_to, {:error, :disconnected})
+              send(test_pid, :acked_error)
+          end
+
+          Process.sleep(:infinity)
+        end)
+
+      :ok = Session.register_stream(pid, stream_pid)
+      message = %{"jsonrpc" => "2.0", "id" => "srv-ack-2", "method" => "sampling/createMessage"}
+
+      assert {:error, :disconnected} =
+               Session.await_client_response(pid, "srv-ack-2", message, 30_000)
+
+      assert_received :acked_error
+      assert Session.get_state(pid).pending_server_requests == %{}
+    end
+
+    @tag doc: """
+         Early deliver_response while ack-pending proves delivery: the
+         caller gets the result immediately, and the late ack must drop
+         in the stale clause instead of crashing the strict handle_info
+         (D5). The fake holds the ack until told, so the orderings are
+         deterministic, not sleep-raced.
+         """
+    test "an early deliver_response answers the caller; the late ack is dropped" do
+      {:ok, pid, _id} = start_ready_session()
+      test_pid = self()
+
+      holding_stream =
+        spawn(fn ->
+          receive do
+            {:push, reply_to, _json} ->
+              send(test_pid, {:held, reply_to})
+
+              receive do
+                :release -> answer_fake_push(reply_to, :ok)
+              end
+          end
+
+          Process.sleep(:infinity)
+        end)
+
+      :ok = Session.register_stream(pid, holding_stream)
+      request_id = "srv-early"
+      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
+
+      task = Task.async(fn -> Session.await_client_response(pid, request_id, message, 5_000) end)
+
+      assert_receive {:held, _reply_to}, 1000
+      result = %{"role" => "assistant", "content" => %{"type" => "text", "text" => "hi"}}
+      :ok = Session.deliver_response(pid, request_id, {:ok, result})
+      assert {:ok, ^result} = Task.await(task, 1000)
+
+      # Release the held ack: it now targets a gone entry and must be
+      # dropped by the stale clause, leaving the session alive.
+      send(holding_stream, :release)
+      Process.sleep(50)
+      assert Session.ready?(pid)
+      assert Session.get_state(pid).pending_server_requests == %{}
+    end
+
+    @tag doc: """
+         The cast half of the same rule (code-review finding, 2026-08-03):
+         a stream that reports its own close via the unregister_stream
+         cast can never ack either — the loop has exited and its drain
+         has already run, so an entry still ack-pending when the cast
+         arrives was forwarded into a mailbox nobody reads. It must be
+         answered {:error, :disconnected} now, not relabelled
+         {:error, :timeout} a full ack window later.
+         """
+    test "an unregister_stream cast answers ack-pending entries {:error, :disconnected}" do
+      {:ok, pid, _id} = start_ready_session()
+      swallowing = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = Session.register_stream(pid, swallowing)
+
+      request_id = "srv-unreg"
+      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
+
+      task = Task.async(fn -> Session.await_client_response(pid, request_id, message, 30_000) end)
+
+      # Settle until the entry is armed (the push is swallowed, never acked).
+      Process.sleep(50)
+      assert map_size(Session.get_state(pid).pending_server_requests) == 1
+
+      :ok = Session.unregister_stream(pid, swallowing)
+      assert {:error, :disconnected} = Task.await(task, 1000)
+      assert Session.get_state(pid).pending_server_requests == %{}
+    end
+
+    @tag doc: """
+         Stream death answers the pending push leg: an ack-pending entry
+         becomes {:error, :stream_down} on the session's stream :DOWN —
+         the dead loop can never ack, and waiting out the ack window
+         would just relabel the same failure {:error, :timeout} later.
+         """
+    test "a stream :DOWN answers ack-pending entries {:error, :stream_down}" do
+      {:ok, pid, _id} = start_ready_session()
+      test_pid = self()
+
+      dying_stream =
+        spawn(fn ->
+          receive do
+            {:push, _reply_to, _json} -> send(test_pid, :swallowed)
+          end
+        end)
+
+      :ok = Session.register_stream(pid, dying_stream)
+      request_id = "srv-down"
+      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
+
+      task = Task.async(fn -> Session.await_client_response(pid, request_id, message, 30_000) end)
+
+      # The fake exits right after swallowing the push (its receive body
+      # ends), so the session's monitor fires while the ack is pending.
+      assert_receive :swallowed, 1000
+      assert {:error, :stream_down} = Task.await(task, 1000)
+      assert Session.get_state(pid).pending_server_requests == %{}
+    end
+
+    @tag doc: """
+         The other half of the :DOWN split (D3): an entry whose client
+         timer is already armed survives stream death — the push was
+         written, the client can still POST its response through a new
+         stream. Only the never-acked leg dies with the stream.
+         """
+    test "a stream :DOWN leaves an acked, awaiting-response entry alive" do
+      {:ok, pid, _id} = start_ready_session()
+      stream_pid = spawn_fake_stream(pid)
+
+      request_id = "srv-survives"
+      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
+
+      task = Task.async(fn -> Session.await_client_response(pid, request_id, message, 5_000) end)
+
+      # The fake acks :ok immediately; wait until the entry is armed.
+      assert_receive {:fake_stream_push, _}, 1000
+      Process.sleep(50)
+
+      Process.exit(stream_pid, :kill)
+      Process.sleep(50)
+      assert map_size(Session.get_state(pid).pending_server_requests) == 1
+
+      result = %{"role" => "assistant", "content" => %{"type" => "text", "text" => "late"}}
+      :ok = Session.deliver_response(pid, request_id, {:ok, result})
+      assert {:ok, ^result} = Task.await(task, 1000)
+    end
+
+    @tag doc: """
+         A reused request_id must not crash the session. The second call
+         supersedes the first entry; the superseded attempt's client timer
+         carries the FIRST attempt's ack_ref, so it matches nothing and
+         drops. Before the ack_ref pin it popped a differently-shaped
+         :ack_pending tuple instead — CaseClauseError inside handle_info,
+         which under restart: :temporary takes the session and every other
+         in-flight request with it — which is why Task.await(second) is the
+         load-bearing assertion here: a crashed session would answer it
+         {:error, :no_session}. The superseded caller is not awaited at
+         all: it falls back to its own outer safety net (client timeout +
+         ack window + 1 s), and waiting that out would add ~6 s to the
+         suite for no extra discrimination.
+         """
+    test "a reused request_id supersedes the first entry without crashing the session" do
+      {:ok, pid, _id} = start_ready_session()
+      _stream_pid = spawn_fake_stream(pid)
+
+      request_id = "srv-dup"
+      message = %{"jsonrpc" => "2.0", "id" => request_id, "method" => "sampling/createMessage"}
+
+      first = Task.async(fn -> Session.await_client_response(pid, request_id, message, 100) end)
+      assert_receive {:fake_stream_push, _}, 1000
+
+      # The fake signals the test BEFORE it acks, so settle: the first
+      # attempt must reach :awaiting_response (client timer armed) before
+      # the second supersedes it — that armed timer is what this test is
+      # about.
+      Process.sleep(50)
+
+      second =
+        Task.async(fn -> Session.await_client_response(pid, request_id, message, 5_000) end)
+
+      assert_receive {:fake_stream_push, _}, 1000
+
+      # Outlive the first attempt's 100 ms client timer: it fires against
+      # the superseded entry and must drop on the ack_ref pin.
+      Process.sleep(200)
+      assert Session.ready?(pid)
+
+      result = %{"role" => "assistant", "content" => %{"type" => "text", "text" => "second"}}
+      :ok = Session.deliver_response(pid, request_id, {:ok, result})
+      assert {:ok, ^result} = Task.await(second, 1000)
+
+      Task.shutdown(first, :brutal_kill)
+    end
+
+    @tag doc: """
+         The ack window may only be shrunk. await_client_response/4 sizes
+         its outer GenServer.call safety net from the compile-time default,
+         in the caller's process where session state is unreachable — so a
+         larger window would let the caller's own call expire first and
+         answer {:error, :timeout} for a reason the vocabulary reserves for
+         a wedged stream. A failure means init/1 stopped enforcing the
+         ceiling and the two clocks are no longer orderable.
+         """
+    test "an :ack_window above the compile-time default is refused at init" do
+      opts = Testing.build_session_opts(ack_window: :timer.seconds(30))
+
+      assert {:error, {%ArgumentError{} = exception, _stacktrace}} = Session.start_session(opts)
+      assert Exception.message(exception) =~ ":ack_window"
+    end
+
+    test "await_client_response answers {:error, :no_session} on a dead session" do
+      {:ok, pid, session_id} = Session.start_session(Testing.build_session_opts())
+      :ok = Session.terminate_session(session_id)
+      refute Process.alive?(pid)
+
+      message = %{"jsonrpc" => "2.0", "id" => "srv-dead", "method" => "sampling/createMessage"}
+      assert {:error, :no_session} = Session.await_client_response(pid, "srv-dead", message, 100)
+    end
+  end
+
   describe "negotiated_version/1" do
     import Plug.Test
     import Plug.Conn
@@ -864,12 +1158,21 @@ defmodule Wymcp.SessionTest do
 
   defp receive_loop(test_pid) do
     receive do
-      {:push, ref, message} ->
-        send(test_pid, {:fake_stream_push, message})
-        send(ref, {ref, :ok})
+      {:push, reply_to, json} ->
+        send(test_pid, {:fake_stream_push, JSON.decode!(json)})
+        answer_fake_push(reply_to, :ok)
         receive_loop(test_pid)
     end
   end
+
+  # The loop side of the push protocol, as Transport.Stream's answer_push/2
+  # does it — fakes must speak the same three reply_to shapes.
+  defp answer_fake_push({:caller, from}, result), do: GenServer.reply(from, result)
+
+  defp answer_fake_push({:ack, session_pid, tag}, result),
+    do: send(session_pid, {:push_ack, tag, result})
+
+  defp answer_fake_push(:none, _result), do: :ok
 
   defp start_session do
     Session.start_session(Testing.build_session_opts(tools: start_session_tools()))
