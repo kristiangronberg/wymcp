@@ -64,6 +64,13 @@ The periodic SSE comment (default 15 s) that keeps a stream's connection
 from being idle-disconnected by proxies. Distinct from the session idle
 timeout.
 
+**list changed**
+The `listChanged` capability declared at initialize and the
+`notifications/tools/list_changed` notification it promises. Wymcp declares
+and sends it for tools only; the resources and prompts variants are
+unimplemented.
+_Avoid_: list-changed hint, hint (for this notification)
+
 **origin check**
 The wire check rejecting requests whose `Origin` header is not on the
 configured allowlist — DNS-rebinding protection. Implemented by
@@ -213,7 +220,6 @@ end collect the synonym sets that span entries.
 - **progress token** — the `_meta` token opting a request into progress notifications. (`Wymcp.Context`, priv/schema.json)
 - **_meta** — the reserved JSON-RPC metadata property, exposed as `Context.meta` (spelled `meta` on the Elixir side). (`Wymcp.Context`)
 - **logging** — server→client `notifications/message` log entries filtered against the session's log level; the client sets it via `logging/setLevel`; eight syslog levels debug→emergency. (`Wymcp.Context.log`, `Wymcp.Methods.LoggingSetLevel`)
-- **list changed** — the `listChanged` capability plus `notifications/tools/list_changed`, sent when runtime tools are registered or unregistered. (`Wymcp.Session.notify_tools_list_changed`)
 
 ### Auth & validation
 
