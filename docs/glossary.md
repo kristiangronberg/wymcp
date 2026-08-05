@@ -113,6 +113,25 @@ _Avoid_: deferred reply
 `Wymcp.Testing.build_session_opts/1`
 _Avoid_: session-init map
 
+**singleton header**
+A request header that may legally carry at most one value. Wymcp's are
+`Mcp-Session-Id`, `MCP-Protocol-Version`, `Last-Event-ID`, `Origin`, and
+`Authorization`. A duplicate is answered by wymcp policy, not by the MCP
+spec, which says nothing about repeated headers; two policies are in use —
+**reject**, failing closed with a 400 naming the header, and **degrade**,
+proceeding without the header's value and logging a warning.
+
+**singleton-header check**
+The wire check that enforces the cardinality of the singleton headers it
+owns, before the request touches any session state: `Mcp-Session-Id` and
+`MCP-Protocol-Version` reject on a duplicate, `Last-Event-ID` degrades.
+Downstream readers of those headers therefore face a two-way present /
+absent decision. Implemented by `Wymcp.Plugs.SingletonHeaders`. `Origin` is
+not among the headers it owns — the origin check runs first, so nothing has
+validated that header by the time it reads it; `Authorization` belongs to
+the consumer's Auth behaviour implementation.
+_Avoid_: header check
+
 **stream**
 `Wymcp.Transport.Stream`
 _Avoid_: StreamManager, stream manager
@@ -125,8 +144,8 @@ _Avoid_: forwarded ack
 
 **wire check**
 A plug that may reject a request at the HTTP boundary, before the request
-touches any session state. Wymcp has two: the origin check and the auth
-check, run in that order.
+touches any session state. Wymcp has three: the origin check, the auth
+check, and the singleton-header check, run in that order.
 _Avoid_: wire-level guard, guard (for rejecting plugs), gate (for
 rejecting plugs)
 
