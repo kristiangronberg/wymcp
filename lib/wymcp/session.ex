@@ -331,16 +331,22 @@ defmodule Wymcp.Session do
 
   1. The session pid stored in `conn.assigns[:wymcp_session_pid]` (the
      authoritative case — pinned at `initialize` time on the session).
-  2. The `MCP-Protocol-Version` request header. After
-     `Wymcp.Plugs.Session` enforces session presence on non-exempt
-     methods, this branch is reached only by `Methods.Initialize`
-     itself, where no session pid exists yet. Honoured only when the
-     header value is in `Wymcp.ProtocolVersion.supported/0`.
+  2. The `MCP-Protocol-Version` request header, when no session pid is
+     assigned. Honoured only when the header value is in
+     `Wymcp.ProtocolVersion.supported/0`. No in-repo caller reaches this
+     branch today — both callers below run on non-exempt methods, so
+     `Wymcp.Plugs.Session` has always assigned the pid by then, and
+     `Methods.Initialize` negotiates from `params["protocolVersion"]`
+     rather than calling this function.
   3. `Wymcp.ProtocolVersion.latest/0` as a last resort.
 
-  This is the single resolver consulted by `Methods.Initialize`,
-  `Methods.ToolsList`, `Methods.ToolsCall`, and `Wymcp.Context.elicit/4`.
-  Adding a fourth call site? Use this function — do not re-derive.
+  Consulted by `Methods.ToolsList` and `Methods.ToolsCall`. Adding a third
+  call site? Use this function — do not re-derive. One precondition comes
+  with it: the conn must have passed `Wymcp.Plugs.SingletonHeaders`, which
+  every route runs. Branch 2 reads the header with no duplicate arm, so a
+  conn carrying two `MCP-Protocol-Version` values raises `CaseClauseError`
+  rather than silently negotiating a value nobody validated — build conns in
+  tests accordingly.
   """
   def negotiated_version(%Plug.Conn{} = conn) do
     case conn.assigns[:wymcp_session_pid] do
@@ -1080,6 +1086,9 @@ defmodule Wymcp.Session do
 
   # -- Version negotiation --
 
+  # Two clauses, not a catch-all: Wymcp.Plugs.SingletonHeaders rejects a
+  # duplicated MCP-Protocol-Version upstream, so a list of two here means a
+  # route ran without the check. Crashing beats silently negotiating latest/0.
   defp version_from_header(conn) do
     case Plug.Conn.get_req_header(conn, "mcp-protocol-version") do
       [version] ->
@@ -1087,7 +1096,7 @@ defmodule Wymcp.Session do
           do: version,
           else: ProtocolVersion.latest()
 
-      _ ->
+      [] ->
         ProtocolVersion.latest()
     end
   end

@@ -29,7 +29,7 @@ implements, to guide planning for the next development phase.
 | `notifications/initialized`                                        | MUST             | ✅ `Methods.Initialized`                                                                                    |
 | Version negotiation (echo or counter-propose)                      | MUST             | ✅ Echoes the client's requested version when supported; counter-proposes `latest/0` for unknown versions   |
 | Negotiated version returned in `InitializeResult.protocolVersion`  | MUST             | ✅ Echoed (or counter-proposed) and pinned on the session                                                   |
-| `MCP-Protocol-Version` HTTP header on subsequent requests          | MUST (HTTP, ≥ 06-18) | ✅ `Plugs.Session` enforces equality on ≥ 06-18 sessions; skipped entirely on 03-26 sessions            |
+| `MCP-Protocol-Version` HTTP header on subsequent requests          | MUST (HTTP, ≥ 06-18) | ✅ `Plugs.Session` enforces equality on ≥ 06-18 sessions, skipped on 03-26 sessions; `Plugs.SingletonHeaders` rejects a duplicated header on every session and every route            |
 | Store negotiated client capabilities for the session               | SHOULD           | ✅ Stored in `Session.State.client_capabilities`                                                            |
 | Capability negotiation for sampling/elicitation                    | SHOULD           | ✅ Server advertises only what client declares; `Wymcp.Context.elicit/4` also gates on negotiated version   |
 | `serverInfo` fields: `title`, `description`, `icons`, `websiteUrl` | MAY              | ✅ Via `:server_info` router option *(included on ≥ 2025-06-18 sessions; stripped for 2025-03-26)*          |

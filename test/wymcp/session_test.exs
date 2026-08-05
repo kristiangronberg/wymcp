@@ -1530,6 +1530,27 @@ defmodule Wymcp.SessionTest do
       assert Wymcp.Session.negotiated_version(conn) ==
                Wymcp.ProtocolVersion.latest()
     end
+
+    @tag doc: """
+         Loud beats silent. version_from_header/1's `_` catch-all answered
+         ProtocolVersion.latest/0 for a duplicated MCP-Protocol-Version — a
+         wrong value chosen in silence. No router path reached it that way
+         (negotiated_version/1 takes the session-pid branch for every
+         in-repo caller, and Methods.Initialize negotiates from params), so
+         this pins the function's own contract, not a live regression:
+         Wymcp.Plugs.SingletonHeaders rejects such a request upstream, and
+         reaching here with two values would mean a route was wired without
+         the check. A crash is the only honest answer.
+         """
+    test "crashes rather than guessing when the header is duplicated" do
+      conn =
+        :post
+        |> conn("/", "")
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> prepend_req_headers([{"mcp-protocol-version", "2025-06-18"}])
+
+      assert_raise CaseClauseError, fn -> Wymcp.Session.negotiated_version(conn) end
+    end
   end
 
   defp start_ready_session do

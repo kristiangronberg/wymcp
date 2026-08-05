@@ -16,8 +16,10 @@ defmodule Wymcp.Transport.StreamBanditTest do
   first supervised fixture, used so ExUnit shuts the listener down
   deterministically — which keeps the module async: true. The bind
   address is pinned rather than left to default: these fixtures mount the
-  router with no :auth or :origin configured, so every wire check passes
-  (Noop auth), and the wildcard bind a missing :ip produces would put a
+  router with no :auth or :origin configured, so the origin and auth checks
+  pass (Noop auth), and their well-formed headers pass the singleton-header
+  check, which runs unconditionally. The wildcard bind a missing :ip produces
+  would put a
   live, unauthenticated MCP session on every interface for the test's
   duration. Sessions are created directly through
   Wymcp.Session.start_session/1: the HTTP handshake is not what this gate

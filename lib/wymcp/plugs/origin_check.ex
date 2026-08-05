@@ -3,7 +3,6 @@ defmodule Wymcp.Plugs.OriginCheck do
 
   import Plug.Conn
   import Wymcp.Response
-  alias Wymcp.JsonRpc
 
   @behaviour Plug
 
@@ -31,11 +30,11 @@ defmodule Wymcp.Plugs.OriginCheck do
         if origin in allowlist do
           conn
         else
-          send_rejection(conn, 403, "Origin not allowed: #{origin}", dialect)
+          reject(conn, 403, "Origin not allowed: #{origin}", dialect)
         end
 
       [_, _ | _] ->
-        send_rejection(
+        reject(
           conn,
           400,
           "Duplicated Origin header. Send exactly one Origin header.",
@@ -44,17 +43,15 @@ defmodule Wymcp.Plugs.OriginCheck do
     end
   end
 
-  # The JSON-RPC dialect's id is always nil here: on POST this plug runs
-  # before parse_body, and on GET/DELETE no body is parsed at all.
-  defp send_rejection(conn, status, message, :json_rpc) do
-    response = JsonRpc.error_response(:invalid_request, nil, %{error: message})
-
-    conn
-    |> put_status(status)
-    |> send_json(response)
-  end
-
-  defp send_rejection(conn, status, message, :plain_json) do
-    send_plain_error(conn, status, message)
+  # The rejection id is always nil here: this is the first wire check, so on
+  # POST it runs before parse_body and on GET/DELETE no body is parsed at all.
+  # Origin's duplicate arm stays in this plug rather than moving to
+  # Wymcp.Plugs.SingletonHeaders — the wire-check invariant puts the origin
+  # check first, so nothing has validated Origin by the time it is read.
+  # Unlike that plug's rows, this arm is reached only when an :origin
+  # allowlist is configured; call/2 returns early otherwise, so a duplicated
+  # Origin passes unexamined in the default configuration.
+  defp reject(conn, status, message, dialect) do
+    send_error(conn, status, nil, message, dialect)
   end
 end

@@ -83,24 +83,30 @@ defmodule Wymcp.Router do
     application config (optional).
 
   Every non-fallthrough route — POST, GET (the SSE stream), DELETE — runs
-  both wire checks before the request touches any session state: the
-  origin check (`Wymcp.Plugs.OriginCheck`), then the auth check
-  (`Wymcp.Plugs.Auth`). This rule is the *wire-check invariant*, and its
-  ordering is load-bearing: 401/403 rejections win over the session
+  all three wire checks before the request touches any session state: the
+  origin check (`Wymcp.Plugs.OriginCheck`), the auth check
+  (`Wymcp.Plugs.Auth`), then the singleton-header check
+  (`Wymcp.Plugs.SingletonHeaders`). This rule is the *wire-check invariant*,
+  and its ordering is load-bearing: 401/403 rejections win over the session
   answers, so an unauthenticated caller learns nothing about session
-  existence — and a rejected request neither resets the session's idle
-  timer nor displaces its registered SSE stream. The fallthrough (any
-  other verb) runs no checks and touches nothing.
+  existence — and a rejected request neither resets the session's idle timer
+  nor displaces its registered SSE stream. The origin check stays first
+  because nothing has validated `Origin` when it runs, which is also why that
+  header's duplicate arm lives in the origin check rather than in the
+  singleton-header check. The fallthrough (any other verb) runs no checks and
+  touches nothing.
 
-  POST runs the checks as the first and fourth plugs of
+  POST runs the checks as the first, fourth, and fifth plugs of
   `Wymcp.Plugs.Pipeline`'s chain: `Wymcp.Plugs.OriginCheck`, JSON body
   parsing, `Wymcp.Plugs.Classify`, `Wymcp.Plugs.Auth`,
-  `Wymcp.Plugs.Session`, `Wymcp.Plugs.Validate`, `Wymcp.Plugs.Dispatch`.
-  GET and DELETE run the same two checks in the route body, before the
-  `Mcp-Session-Id` header is read. A wire check's rejection speaks the
-  error dialect of the route it runs on: the JSON-RPC dialect on POST,
-  the plain-JSON dialect (`%{error: message}`) on GET and DELETE — with
-  the 401 `WWW-Authenticate` challenge on every method.
+  `Wymcp.Plugs.SingletonHeaders`, `Wymcp.Plugs.Session`,
+  `Wymcp.Plugs.Validate`, `Wymcp.Plugs.Dispatch` — the singleton-header check
+  sits after parsing and classification so its rejection can carry the body
+  id and know the message kind. GET and DELETE run the same three checks in
+  the route body, before the `Mcp-Session-Id` header is read. A wire check's
+  rejection speaks the error dialect of the route it runs on: the JSON-RPC
+  dialect on POST, the plain-JSON dialect (`%{error: message}`) on GET and
+  DELETE — with the 401 `WWW-Authenticate` challenge on every method.
 
   ```mermaid
   flowchart TD
@@ -114,6 +120,7 @@ defmodule Wymcp.Router do
           POST --> P["Plugs.Pipeline (wire checks inside)"]
           WC --> OC[Plugs.OriginCheck]
           WC --> AU[Plugs.Auth]
+          WC --> SH[Plugs.SingletonHeaders]
           GET --> S[Session]
           GET --> ST[Transport.Stream]
           DELETE --> S
@@ -134,6 +141,7 @@ defmodule Wymcp.Router do
 
   @origin_check_opts Plugs.OriginCheck.init(error_dialect: :plain_json)
   @auth_check_opts Plugs.Auth.init(error_dialect: :plain_json)
+  @singleton_headers_opts Plugs.SingletonHeaders.init(error_dialect: :plain_json)
   @pipeline_opts Plugs.Pipeline.init([])
 
   plug(:match)
@@ -254,6 +262,7 @@ defmodule Wymcp.Router do
     Plug.run(conn, [
       &Plugs.OriginCheck.call(&1, @origin_check_opts),
       &Plugs.Auth.call(&1, @auth_check_opts),
+      &Plugs.SingletonHeaders.call(&1, @singleton_headers_opts),
       handler
     ])
   end
@@ -268,9 +277,6 @@ defmodule Wymcp.Router do
 
       [] ->
         missing_session_header(conn)
-
-      [_, _ | _] ->
-        duplicated_session_header(conn)
     end
   end
 
@@ -284,22 +290,11 @@ defmodule Wymcp.Router do
 
       [] ->
         missing_session_header(conn)
-
-      [_, _ | _] ->
-        duplicated_session_header(conn)
     end
   end
 
   defp missing_session_header(conn) do
     send_plain_error(conn, 400, "Missing mcp-session-id header")
-  end
-
-  defp duplicated_session_header(conn) do
-    send_plain_error(
-      conn,
-      400,
-      "Duplicated Mcp-Session-Id header. Send exactly one Mcp-Session-Id header."
-    )
   end
 
   defp open_stream(conn, session_pid) do

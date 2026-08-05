@@ -1732,6 +1732,185 @@ defmodule Wymcp.RouterTest do
     end
   end
 
+  describe "singleton-header check" do
+    @tag doc: """
+         Wire change 1: before the check existed, initialize carrying a
+         duplicated MCP-Protocol-Version simply succeeded — nothing read the
+         header's cardinality on that path. Initialize is session-exempt, so
+         Plugs.Session returned before reading it, and Methods.Initialize
+         negotiates from params["protocolVersion"], never from the header.
+         This is the first request every client sends, so a regression here is
+         maximally visible.
+         """
+    test "initialize with a duplicated MCP-Protocol-Version answers 400" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 0,
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => "2025-11-25",
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "1.0"}
+        }
+      }
+
+      conn =
+        conn(:post, "/", JSON.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> prepend_req_headers([{"mcp-protocol-version", "2025-11-25"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert get_resp_header(conn, "mcp-session-id") == []
+      resp = JSON.decode!(conn.resp_body)
+      assert resp["id"] == 0
+      assert resp["error"]["code"] == -32600
+      assert resp["error"]["data"]["error"] =~ "Duplicated MCP-Protocol-Version"
+    end
+
+    @tag doc: """
+         Wire change 3, the forced one. Plugs.Session gates its
+         MCP-Protocol-Version read on
+         ProtocolVersion.supports_protocol_version_header?/1, so on a
+         2025-03-26 session the header was never read and a duplicate never
+         noticed. The check sits before any session pid resolves and so cannot
+         know the negotiated version — a version-blind reject list is the price
+         of running before the request touches session state.
+         """
+    test "a 2025-03-26 session gets 400 for a duplicated MCP-Protocol-Version" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      init_body = %{
+        "jsonrpc" => "2.0",
+        "id" => 0,
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => "2025-03-26",
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "1.0"}
+        }
+      }
+
+      init_conn =
+        conn(:post, "/", JSON.encode!(init_body))
+        |> put_req_header("content-type", "application/json")
+        |> Wymcp.Router.call(opts)
+
+      assert JSON.decode!(init_conn.resp_body)["result"]["protocolVersion"] == "2025-03-26"
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+
+      list_body = %{"jsonrpc" => "2.0", "id" => 9, "method" => "tools/list"}
+
+      conn =
+        conn(:post, "/", JSON.encode!(list_body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> prepend_req_headers([{"mcp-protocol-version", "2025-11-25"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+
+      assert JSON.decode!(conn.resp_body)["error"]["data"]["error"] =~
+               "Duplicated MCP-Protocol-Version"
+    end
+
+    @tag doc: """
+         Wire change 2: GET and DELETE never read MCP-Protocol-Version at all
+         before the check existed — a duplicate reached the routes' own
+         missing-session-header 400 with the wrong message, or (with a live
+         session) succeeded outright. Discriminating on the message rather than
+         the status is deliberate: both answers are 400.
+         """
+    test "GET with a duplicated MCP-Protocol-Version answers 400 naming the header" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:get, "/")
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> prepend_req_headers([{"mcp-protocol-version", "2025-11-25"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+
+      assert JSON.decode!(conn.resp_body) == %{
+               "error" =>
+                 "Duplicated MCP-Protocol-Version header. Send exactly one MCP-Protocol-Version header."
+             }
+    end
+
+    test "DELETE with a duplicated MCP-Protocol-Version answers 400 without terminating the session" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> prepend_req_headers([{"mcp-protocol-version", "2025-11-25"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["error"] =~ "Duplicated MCP-Protocol-Version"
+      assert {:ok, _pid} = Wymcp.Session.lookup(session_id)
+    end
+
+    @tag doc: """
+         Wire change 4. A JSON-RPC response message's id belongs to a request
+         the *server* sent; the missing-session-header 400 used to echo it,
+         handing a strict client a second answer to its own outstanding
+         sampling/elicitation call. The envelope now carries null. The 404
+         branch already special-cased :response with an empty body — this
+         closes the same hole on the 400 branch.
+         """
+    test "a response message rejected for a missing session header carries a null id" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+      body = %{"jsonrpc" => "2.0", "id" => 42, "result" => %{"role" => "assistant"}}
+
+      conn =
+        conn(:post, "/", JSON.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      resp = JSON.decode!(conn.resp_body)
+      assert resp["id"] == nil
+      assert resp["error"]["data"]["error"] =~ "Missing Mcp-Session-Id"
+    end
+
+    @tag doc: """
+         The same null-id rule on the *duplicated*-header rejection, driven
+         end-to-end through the real router rather than a hand-built conn.
+         This is the only test that pins the pipeline ORDER the rule depends
+         on: Response.rejection_id/1 reads the :wymcp_message_type assign that
+         Plugs.Classify writes, so Plugs.SingletonHeaders must sit after
+         Plugs.Classify. Move the check earlier — a natural-looking edit,
+         since cardinality is a wire fact — and the assign is nil, the
+         response message is misread as a request, and the server-minted id is
+         echoed again. singleton_headers_test.exs cannot catch that: it sets
+         the assign by hand.
+         """
+    test "a response message rejected for a duplicated session header carries a null id" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+      body = %{"jsonrpc" => "2.0", "id" => 42, "result" => %{"role" => "assistant"}}
+
+      conn =
+        conn(:post, "/", JSON.encode!(body))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", "abc")
+        |> prepend_req_headers([{"mcp-session-id", "abc"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      resp = JSON.decode!(conn.resp_body)
+      assert resp["id"] == nil
+      assert resp["error"]["data"]["error"] =~ "Duplicated Mcp-Session-Id"
+    end
+  end
+
   describe "session-aware routing" do
     @tag doc: """
          Non-exempt requests without Mcp-Session-Id must be rejected with

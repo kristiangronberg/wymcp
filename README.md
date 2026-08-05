@@ -256,8 +256,10 @@ flowchart LR
     Router --> Pipeline["Plugs.Pipeline"]
     Router --> OriginCheck["Plugs.OriginCheck"]
     Router --> AuthPlug["Plugs.Auth"]
+    Router --> SingletonHeaders["Plugs.SingletonHeaders"]
     Pipeline --> OriginCheck
     Pipeline --> AuthPlug
+    Pipeline --> SingletonHeaders
     AuthPlug --> Auth
     Pipeline --> Validate["Plugs.Validate"]
     Pipeline --> Dispatch["Plugs.Dispatch"]
@@ -313,8 +315,9 @@ legal everywhere else — including the tool-level `description()` and
 [`Wymcp.Router`](lib/wymcp/router.ex) is the Plug entry point. It accepts
 `:tools` (a list of `Wymcp.Tool` modules) plus optional `:auth` and `:origin`
 options, and runs every non-fallthrough route — POST, the GET SSE stream,
-DELETE — through both wire checks (origin, then auth) before anything touches
-session state; on POST the checks run inside the plug pipeline, where JSON
+DELETE — through all three wire checks (origin, then auth, then the singleton-header
+check that rejects a duplicated `Mcp-Session-Id` or `MCP-Protocol-Version`)
+before anything touches session state; on POST the checks run inside the plug pipeline, where JSON
 parsing sits between them, and the request then continues through MCP schema
 validation and method dispatch. Consuming applications forward a route to
 this module and do not interact with the internal plug pipeline directly.
@@ -400,12 +403,15 @@ requests are validated against the official protocol definition without runtime
 schema parsing.
 
 [`Wymcp.Response`](lib/wymcp/response.ex) is the lowest-level output module in
-the pipeline — one sender per error dialect. JSON-RPC envelopes — tool results,
-JSON-RPC errors, POST auth rejections — go through `send_json/2`, which
-preserves any previously-set HTTP status code; the flat plain-JSON errors of
-the GET/DELETE routes and their wire checks go through `send_plain_error/3`.
-Both halt the connection so downstream plugs do not execute after a response
-is sent.
+the pipeline. Two primitives, one per error dialect: JSON-RPC envelopes — tool
+results, JSON-RPC errors, POST auth rejections — go through `send_json/2`,
+which preserves any previously-set HTTP status code; the flat plain-JSON errors
+of the GET/DELETE routes go through `send_plain_error/3`. Above them sits
+`send_error/5`, the shared rejection sender that takes the dialect as a
+parameter, so a wire check running on both POST and GET/DELETE states its
+status and message once instead of carrying its own dialect switch. Every
+sender halts the connection so downstream plugs do not execute after a
+response is sent.
 
 [`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) is the chunked SSE
 connection for one session, run as a receive loop by the GET request process

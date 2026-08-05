@@ -42,7 +42,6 @@ defmodule Wymcp.Plugs.Auth do
 
   import Wymcp.Response
   import Plug.Conn
-  alias Wymcp.JsonRpc
 
   @behaviour Plug
 
@@ -123,19 +122,8 @@ defmodule Wymcp.Plugs.Auth do
   defp send_unauthorized(conn, reason, dialect) do
     conn
     |> put_resp_header("www-authenticate", www_authenticate_value(conn))
-    |> send_rejection(reason, dialect)
+    |> send_error(401, request_field(conn, "id"), reason, dialect)
   end
-
-  defp send_rejection(conn, reason, :json_rpc) do
-    request_id = request_field(conn, "id")
-    response = JsonRpc.error_response(:invalid_request, request_id, %{error: reason})
-
-    conn
-    |> put_status(401)
-    |> send_json(response)
-  end
-
-  defp send_rejection(conn, reason, :plain_json), do: send_plain_error(conn, 401, reason)
 
   # Bare `Bearer` unless the consumer configured auth-params via the router's
   # :www_authenticate option (see Wymcp.Router). MFA values are resolved per

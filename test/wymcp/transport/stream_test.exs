@@ -24,6 +24,7 @@ defmodule Wymcp.Transport.StreamTest do
   import Plug.Conn
   import Plug.Test
 
+  alias Wymcp.Plugs.SingletonHeaders
   alias Wymcp.Session
   alias Wymcp.Testing
   alias Wymcp.Transport.Stream
@@ -164,6 +165,37 @@ defmodule Wymcp.Transport.StreamTest do
 
       assert log =~ "SSE resumption point discarded"
       assert log =~ "evt-x"
+    end
+
+    @tag doc: """
+         A duplicated Last-Event-ID degrades rather than rejecting — a
+         resumption hint is not a routing fact — but it must not silently pick
+         one of the two values, which is what List.first/1 did before
+         Wymcp.Plugs.SingletonHeaders assigned the three-way outcome. The
+         stream starts fresh and the discard is logged.
+         """
+    test "discards a duplicated Last-Event-ID, starts fresh, and warns" do
+      session_pid = start_session()
+
+      log =
+        capture_log(fn ->
+          task =
+            serve_task(
+              session_pid,
+              [{"last-event-id", "evt-7"}, {"last-event-id", "evt-3"}],
+              @quiet_keepalive
+            )
+
+          stream_pid = wait_for_stream(session_pid)
+
+          :ok = Stream.replace(stream_pid)
+
+          assert {:ok, conn} = Task.await(task)
+          assert conn.resp_body == "id: evt-1\ndata: \n\n"
+        end)
+
+      assert log =~ "SSE resumption point discarded"
+      assert log =~ "duplicated Last-Event-ID"
     end
 
     test "evt-0 keeps the info reconnected line, not the discard warning" do
@@ -484,12 +516,18 @@ defmodule Wymcp.Transport.StreamTest do
     pid
   end
 
+  # The stream reads the Last-Event-ID *outcome* from an assign, not the
+  # header — Wymcp.Plugs.SingletonHeaders writes it on every route. Running
+  # the real plug here keeps these fixtures on the production path instead of
+  # hand-writing the assign.
   defp serve_task(session_pid, req_headers, opts, adapter \\ nil) do
     Task.async(fn ->
       conn =
-        Enum.reduce(req_headers, conn(:get, "/"), fn {name, value}, acc ->
-          put_req_header(acc, name, value)
+        req_headers
+        |> Enum.reduce(conn(:get, "/"), fn {name, value}, acc ->
+          prepend_req_headers(acc, [{name, value}])
         end)
+        |> SingletonHeaders.call(SingletonHeaders.init([]))
 
       Stream.serve(with_adapter(conn, adapter), session_pid, opts)
     end)

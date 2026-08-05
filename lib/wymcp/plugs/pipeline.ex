@@ -9,6 +9,7 @@ defmodule Wymcp.Plugs.Pipeline do
   plug(:parse_body)
   plug(Plugs.Classify)
   plug(Plugs.Auth)
+  plug(Plugs.SingletonHeaders)
   plug(Plugs.Session)
   plug(Plugs.Validate)
   plug(Plugs.Dispatch)

@@ -3,7 +3,7 @@ defmodule Wymcp.Plugs.Session do
   Resolves the MCP session for an incoming request and enforces the
   spec-mandated lifecycle.
 
-  Four outcomes per request:
+  Three outcomes per request:
 
     * **Session header present and registered** — assigns
       `:wymcp_session_pid` and `:wymcp_session_id`, calls `Session.touch/1`,
@@ -18,14 +18,6 @@ defmodule Wymcp.Plugs.Session do
       respond to requests without an `MCP-Session-Id` header with
       HTTP 400 Bad Request."
 
-    * **Singleton header duplicated** — rejects with HTTP 400 + JSON-RPC
-      -32600 (`invalid_request`), naming the header. A request carrying
-      more than one `Mcp-Session-Id` (or `MCP-Protocol-Version`) value is
-      malformed; picking one silently would mask a broken proxy, so the
-      request fails closed. For `MCP-Protocol-Version` the duplication
-      check runs before value comparison — two values are rejected even
-      when one matches the negotiated version.
-
     * **Session header present but not registered** — rejects with
       HTTP 404. Per the MCP 2025-11-25 spec, Streamable HTTP / Session
       Management clauses 3 and 4: a server MAY terminate a session at
@@ -35,16 +27,32 @@ defmodule Wymcp.Plugs.Session do
       clause 3 — the spec does not distinguish "I never saw this ID"
       from "I terminated this ID".
 
+  Header *cardinality* is not this plug's job: `Wymcp.Plugs.SingletonHeaders`
+  runs upstream and rejects a duplicated `Mcp-Session-Id` or
+  `MCP-Protocol-Version` before the request reaches here. That is why no read
+  below carries a duplicate arm — on every path that gets here, the header
+  carried at most one value. A header's *value* is still this plug's
+  business, so `enforce_protocol_version_header/2` keeps a third clause for
+  the value that is present but wrong. A read that crashes with
+  `CaseClauseError` therefore means a route was wired without the check, not
+  that a client sent something exotic.
+
+  The missing-header and lifecycle 400s below carry the id
+  `Wymcp.Response.rejection_id/1` gives: the body's, except on a response
+  message, where it is `nil` — the same reasoning that makes the
+  response-message 404 an empty body. `protocol_version_mismatch/1` is the
+  one exception: it still echoes the raw body id even on a response message,
+  a known gap left outside this change's scope and flagged at its call site.
+
   ### Flow
 
   ```mermaid
   flowchart TD
       A[Incoming POST] --> B{Mcp-Session-Id<br/>required?}
       B -->|"no — initialize / ping"| Pass([pass through<br/>to next plug])
-      B -->|yes| C{Header count?}
-      C -->|none| R400([HTTP 400<br/>JSON-RPC -32600<br/>invalid_request])
-      C -->|"more than one"| R400
-      C -->|"exactly one"| D{Session.lookup}
+      B -->|yes| C{Header present?}
+      C -->|no| R400([HTTP 400<br/>JSON-RPC -32600<br/>invalid_request])
+      C -->|yes| D{Session.lookup}
       D -->|"{:ok, pid}"| E[assign pid<br/>+ touch<br/>+ check version<br/>+ lifecycle gate] --> Pass
       D -->|":not_found"| F{Message kind?}
       F -->|"request<br/>(has id)"| R404Body([HTTP 404<br/>JSON-RPC -32001<br/>'Session terminated'<br/>no data field])
@@ -148,9 +156,6 @@ defmodule Wymcp.Plugs.Session do
 
       [] ->
         missing_session_header(conn)
-
-      [_, _ | _] ->
-        duplicated_header(conn, "Mcp-Session-Id")
     end
   end
 
@@ -175,9 +180,6 @@ defmodule Wymcp.Plugs.Session do
 
       [] ->
         missing_session_header(conn)
-
-      [_, _ | _] ->
-        duplicated_header(conn, "Mcp-Session-Id")
     end
   end
 
@@ -196,27 +198,12 @@ defmodule Wymcp.Plugs.Session do
   end
 
   defp missing_session_header(conn) do
-    request_id = conn.body_params["id"]
-    data = %{error: "Missing Mcp-Session-Id header. Initialize first."}
-    response = JsonRpc.error_response(:invalid_request, request_id, data)
-
-    conn
-    |> put_status(400)
-    |> send_json(response)
-  end
-
-  defp duplicated_header(conn, header_name) do
-    request_id = conn.body_params["id"]
-
-    data = %{
-      error: "Duplicated #{header_name} header. Send exactly one #{header_name} header."
-    }
-
-    response = JsonRpc.error_response(:invalid_request, request_id, data)
-
-    conn
-    |> put_status(400)
-    |> send_json(response)
+    send_error(
+      conn,
+      400,
+      rejection_id(conn),
+      "Missing Mcp-Session-Id header. Initialize first."
+    )
   end
 
   defp session_terminated(conn, session_id) do
@@ -249,13 +236,12 @@ defmodule Wymcp.Plugs.Session do
   end
 
   defp session_not_ready(conn) do
-    request_id = conn.body_params["id"]
-    data = %{error: "Session not yet initialized. Send notifications/initialized first."}
-    response = JsonRpc.error_response(:invalid_request, request_id, data)
-
-    conn
-    |> put_status(400)
-    |> send_json(response)
+    send_error(
+      conn,
+      400,
+      rejection_id(conn),
+      "Session not yet initialized. Send notifications/initialized first."
+    )
   end
 
   defp check_protocol_version(conn, pid) do
@@ -278,26 +264,21 @@ defmodule Wymcp.Plugs.Session do
         # don't send MCP-Protocol-Version yet.
         conn
 
-      [_, _ | _] ->
-        duplicated_header(conn, "MCP-Protocol-Version")
-
       [_wrong] ->
         protocol_version_mismatch(conn)
     end
   end
 
+  # The id stays the raw body id rather than rejection_id/1: this branch IS
+  # reachable on the :response path, and narrowing it there would be a fifth
+  # wire change, outside this topic's four. Filed thought, not an oversight —
+  # see the topic's plan.md, Assumptions.
   defp protocol_version_mismatch(conn) do
-    request_id = conn.body_params["id"]
-
-    data = %{
-      error:
-        "Incorrect MCP-Protocol-Version header. Expected the version negotiated during initialize."
-    }
-
-    response = JsonRpc.error_response(:invalid_request, request_id, data)
-
-    conn
-    |> put_status(400)
-    |> send_json(response)
+    send_error(
+      conn,
+      400,
+      conn.body_params["id"],
+      "Incorrect MCP-Protocol-Version header. Expected the version negotiated during initialize."
+    )
   end
 end

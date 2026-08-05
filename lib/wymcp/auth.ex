@@ -34,14 +34,36 @@ defmodule Wymcp.Auth do
 
         @impl Wymcp.Auth
         def authenticate(conn) do
-          with ["Bearer " <> token] <- Plug.Conn.get_req_header(conn, "authorization"),
-               {:ok, user} <- MyApp.Accounts.fetch_user_by_api_token(token) do
-            {:ok, Plug.Conn.assign(conn, :current_user, user)}
-          else
-            _ -> {:error, "Invalid or missing Bearer token"}
+          case Plug.Conn.get_req_header(conn, "authorization") do
+            [header] ->
+              with "Bearer " <> token <- header,
+                   {:ok, user} <- MyApp.Accounts.fetch_user_by_api_token(token) do
+                {:ok, Plug.Conn.assign(conn, :current_user, user)}
+              else
+                _ -> {:error, "Invalid Bearer token"}
+              end
+
+            [] ->
+              {:error, "Missing Authorization header"}
+
+            [_, _ | _] ->
+              {:error, "Duplicated Authorization header. Send exactly one Authorization header."}
           end
         end
       end
+
+  The three-way read is the point. `Plug.Conn.get_req_header/2` returns
+  *every* value of a repeated header, so a two-way `["Bearer " <> token]`
+  match folds a duplicated `Authorization` into the same answer as a missing
+  one — a wrong message, not merely a vague one, and it is the arm a
+  copied-and-trimmed example loses first.
+
+  `Authorization` is the one singleton header (`docs/glossary.md`) wymcp
+  cannot validate centrally: `Wymcp.Plugs.SingletonHeaders` runs *after* this
+  callback, because a 401 must win over any answer that depends on reading
+  the request further. A duplicated `Authorization` therefore reaches
+  `c:authenticate/1` untouched, and this example is the only leverage wymcp
+  has on it.
 
   ## MCP specification notes
 

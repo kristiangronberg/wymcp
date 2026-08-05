@@ -39,6 +39,7 @@ POST /
       ├─ parse_body (Plug.Parsers for JSON)
       ├─ Plugs.Classify (tags the JSON-RPC message kind: request / notification / response)
       ├─ Plugs.Auth (wire check: Bearer token via Wymcp.Auth behaviour)
+      ├─ Plugs.SingletonHeaders (wire check: at most one Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID)
       ├─ Plugs.Session (Mcp-Session-Id lookup + MCP-Protocol-Version check)
       ├─ Plugs.Validate (MCP schema validation via JSV, compiled at build time from priv/schema.json)
       └─ Plugs.Dispatch (routes by "method" string)
@@ -46,10 +47,10 @@ POST /
             → Wymcp.Response.send_json (JSON-RPC envelope, halts conn)
 
 GET / and DELETE /
-  → Wymcp.Router runs the same two wire checks first (Plugs.OriginCheck →
-    Plugs.Auth, rejections in the routes' plain-JSON dialect), then reads
-    Mcp-Session-Id → GET opens the SSE stream (Transport.Stream), DELETE
-    terminates the session
+  → Wymcp.Router runs the same three wire checks first (Plugs.OriginCheck →
+    Plugs.Auth → Plugs.SingletonHeaders, rejections in the routes' plain-JSON
+    dialect), then reads Mcp-Session-Id → GET opens the SSE stream
+    (Transport.Stream), DELETE terminates the session
 ```
 
 **Key design decisions:**

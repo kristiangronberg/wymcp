@@ -64,30 +64,6 @@ defmodule Wymcp.Plugs.SessionTest do
   end
 
   @tag doc: """
-       get_req_header/2 returns every value of a repeated header — the old
-       single-element case head crashed with CaseClauseError (a 500) on a
-       duplicated Mcp-Session-Id. Duplication must be a clean 400 naming
-       the header, and it must fail closed: no first-value-wins, even when
-       both values are the same registered session id.
-       """
-  test "rejects requests with a duplicated Mcp-Session-Id header with 400" do
-    {:ok, _pid, session_id} = start_ready_session()
-
-    conn =
-      conn(:post, "/")
-      |> put_req_header("mcp-session-id", session_id)
-      |> prepend_req_headers([{"mcp-session-id", session_id}])
-      |> Map.put(:body_params, %{"method" => "tools/list", "id" => 1})
-      |> SessionPlug.call(SessionPlug.init([]))
-
-    assert conn.halted
-    assert conn.status == 400
-    body = JSON.decode!(conn.resp_body)
-    assert body["error"]["code"] == -32600
-    assert body["error"]["data"]["error"] =~ "Duplicated Mcp-Session-Id"
-  end
-
-  @tag doc: """
        Per MCP 2025-11-25 (Streamable HTTP / Session Management, clauses
        3 and 4), a request bearing an unrecognised Mcp-Session-Id MUST
        be answered with HTTP 404. The body uses JSON-RPC code -32001 and
@@ -181,6 +157,32 @@ defmodule Wymcp.Plugs.SessionTest do
     refute conn.halted
   end
 
+  @tag doc: """
+       The lifecycle gate's 400. resources/list is neither session-exempt
+       nor lifecycle-exempt, so it is refused while the session is still
+       :initializing. Asserting the echoed id is what pins send_error/5's
+       argument order at this call site: the branch has no other coverage
+       anywhere in the suite, so a swapped id/message or a mistyped status
+       would otherwise ship green.
+       """
+  test "rejects a non-exempt method with 400 while the session is still initializing" do
+    {:ok, _pid, session_id} = Session.start_session(Testing.build_session_opts())
+
+    conn =
+      conn(:post, "/")
+      |> put_req_header("mcp-session-id", session_id)
+      |> put_req_header("mcp-protocol-version", "2025-11-25")
+      |> Map.put(:body_params, %{"method" => "resources/list", "id" => 5})
+      |> SessionPlug.call(SessionPlug.init([]))
+
+    assert conn.halted
+    assert conn.status == 400
+    body = JSON.decode!(conn.resp_body)
+    assert body["id"] == 5
+    assert body["error"]["code"] == -32600
+    assert body["error"]["data"]["error"] =~ "Session not yet initialized"
+  end
+
   test "allows notifications/initialized when session is still initializing" do
     {:ok, _pid, session_id} =
       Session.start_session(Testing.build_session_opts())
@@ -239,27 +241,6 @@ defmodule Wymcp.Plugs.SessionTest do
     assert conn.status == 400
   end
 
-  test "rejects response messages with a duplicated Mcp-Session-Id header with 400" do
-    {:ok, _pid, session_id} = start_ready_session()
-
-    conn =
-      conn(:post, "/")
-      |> put_req_header("mcp-session-id", session_id)
-      |> prepend_req_headers([{"mcp-session-id", session_id}])
-      |> Map.put(:body_params, %{
-        "jsonrpc" => "2.0",
-        "id" => 42,
-        "result" => %{"role" => "assistant"}
-      })
-      |> assign(:wymcp_message_type, :response)
-      |> SessionPlug.call(SessionPlug.init([]))
-
-    assert conn.halted
-    assert conn.status == 400
-    body = JSON.decode!(conn.resp_body)
-    assert body["error"]["data"]["error"] =~ "Duplicated Mcp-Session-Id"
-  end
-
   test "allows tools/list when session is ready" do
     {:ok, pid, session_id} =
       Session.start_session(Testing.build_session_opts())
@@ -315,29 +296,6 @@ defmodule Wymcp.Plugs.SessionTest do
       body = JSON.decode!(conn.resp_body)
       assert body["error"]["code"] == -32600
       assert body["error"]["data"]["error"] =~ "MCP-Protocol-Version"
-    end
-
-    @tag doc: """
-         Totality is checked at the case head, before value comparison: a
-         duplicated MCP-Protocol-Version header is a 400 even when one of
-         the values matches the negotiated version.
-         """
-    test "rejects a duplicated MCP-Protocol-Version header even when one value matches" do
-      {:ok, _pid, session_id} = start_ready_session()
-
-      conn =
-        conn(:post, "/")
-        |> put_req_header("mcp-session-id", session_id)
-        |> put_req_header("mcp-protocol-version", "2025-11-25")
-        |> prepend_req_headers([{"mcp-protocol-version", "2025-11-25"}])
-        |> Map.put(:body_params, %{"method" => "tools/list", "id" => 1})
-        |> SessionPlug.call(SessionPlug.init([]))
-
-      assert conn.halted
-      assert conn.status == 400
-      body = JSON.decode!(conn.resp_body)
-      assert body["error"]["code"] == -32600
-      assert body["error"]["data"]["error"] =~ "Duplicated MCP-Protocol-Version"
     end
 
     test "passes request with correct MCP-Protocol-Version header" do

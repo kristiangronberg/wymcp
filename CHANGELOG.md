@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through it; `tools/call` and the help tool keep `get_tools/1`, which does
   not clear. Serving the client the list is the only proof it is current,
   which is why the clearing read carries its own name.
+- `Wymcp.Response.send_error/5` — the shared rejection sender, taking the
+  error dialect as a parameter, plus `Wymcp.Response.rejection_id/1`, the one
+  rule for what id a rejection envelope echoes. The three wire checks and
+  `Wymcp.Plugs.Session`'s 400s now route through it; the private two-clause
+  dialect switches in `Wymcp.Plugs.Auth` and `Wymcp.Plugs.OriginCheck` are
+  gone, and with them the asymmetry where one hardcoded 401 in both clauses
+  while the other threaded status as a parameter.
 
 ### Changed
 
@@ -117,9 +124,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indistinguishable from an answered one. Accepted semantic change: a
   raise inside help now drops the help event; `[:wymcp, :tool, :error]`
   still records the call.
-- **BREAKING:** GET and DELETE now run both wire checks — the origin
-  check, then the auth check — before reading the `Mcp-Session-Id`
-  header; previously only POST ran them. With an `:auth` module
+- **BREAKING:** GET and DELETE now run the origin and auth wire checks —
+  origin first, then auth — before reading the `Mcp-Session-Id`
+  header; previously only POST ran them. (A third wire check, the
+  singleton-header check, joins them later in this same release — see its
+  own entry below.) With an `:auth` module
   configured, unauthenticated GET (SSE) and DELETE requests answer 401
   with the `WWW-Authenticate` challenge; with an `:origin` allowlist,
   a disallowed or duplicated `Origin` header answers 403/400. Rejections
@@ -144,6 +153,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (it only moves the module between the runtime and compile-time lists,
   which `Wymcp.Session.get_tools/1` merges to the same result). Both still
   return `:ok`.
+- **BREAKING:** a new wire check, `Wymcp.Plugs.SingletonHeaders`, validates
+  the cardinality of `Mcp-Session-Id`, `MCP-Protocol-Version`, and
+  `Last-Event-ID` on every non-fallthrough route, before the request touches
+  any session state. A duplicated `Mcp-Session-Id` or `MCP-Protocol-Version`
+  answers 400 naming the header (the same body the removed per-site checks
+  sent); a duplicated `Last-Event-ID` degrades — the stream opens and the
+  resumption point is discarded with a warning where `List.first/1` used to
+  pick a value silently.
+
+  **Migration.** Previously a duplicated header was rejected only where
+  something happened to read it, so every path that did *not* read it
+  succeeded. All of those now answer 400. Concretely, requests that used to
+  return 200 and no longer do:
+
+    * any **GET** or **DELETE** carrying a duplicated `MCP-Protocol-Version`
+      — those routes never read that header at all;
+    * any **session-exempt POST** (`initialize`, `ping`) carrying a
+      duplicated `Mcp-Session-Id` *or* `MCP-Protocol-Version` —
+      `Wymcp.Plugs.Session` returns before reading either for these methods,
+      so neither was ever checked. Note this includes `initialize`, the
+      first request every client sends;
+    * any request on a **2025-03-26** session carrying a duplicated
+      `MCP-Protocol-Version` — that session's version does not use the
+      header, so it was never read. This one is forced rather than chosen:
+      the check runs before a session pid resolves and so cannot know the
+      negotiated version.
+
+  Conformant clients send each header at most once and are unaffected; the
+  exposure is a proxy that repeats a header. `Origin` keeps its duplicate
+  check in `Wymcp.Plugs.OriginCheck`, which must run first — note that check
+  is skipped entirely when no `:origin` allowlist is configured, so a
+  duplicated `Origin` is not rejected in the default configuration.
+- `Wymcp.Auth`'s example implementation now reads the `Authorization` header
+  three ways, naming a duplicated header instead of folding it into the
+  missing-token message. `Authorization` is the one singleton header wymcp
+  cannot validate centrally — the auth callback runs before the
+  singleton-header check, so a 401 wins — which makes the example the only
+  place the shape can be taught. Documentation only; no API change.
 
 ### Fixed
 
@@ -163,6 +210,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout, or crash — is now simply gone: `lookup/1` answers
   `{:error, :not_found}`, the wire answers 404 + `-32001`, the client
   re-initializes.
+- A JSON-RPC **response** message rejected for a missing **or duplicated**
+  `Mcp-Session-Id` header no longer echoes the message's `id`. That id was
+  minted by the *server* for its own outstanding sampling or elicitation
+  request, so the error envelope read as a second, conflicting answer to it;
+  the envelope now carries `null`, matching the reasoning that already gave
+  the response-path 404 an empty body. Requests and notifications are
+  unaffected.
+
+  Two rejection paths still echo the raw body id, deliberately left outside
+  this change's scope: `Wymcp.Plugs.Auth`'s 401, and
+  `Wymcp.Plugs.Session`'s `MCP-Protocol-Version` *mismatch* 400 (reachable
+  on the response path). Both remain open.
 
 ## [0.9.0]
 

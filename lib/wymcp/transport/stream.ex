@@ -151,8 +151,12 @@ defmodule Wymcp.Transport.Stream do
   `{:error, :session_gone}` before anything is committed when registering
   with the session fails — the session died between the router's lookup and
   registration, or the registration call timed out; the log distinguishes
-  the two. The `Last-Event-ID` request header (first value wins) sets the
-  resumption point.
+  the two. The resumption point comes from `Wymcp.Plugs.SingletonHeaders`'
+  `:wymcp_last_event_id` assign, not from the header directly: a single
+  well-formed value resumes the counter, and a missing, malformed, or
+  duplicated one starts fresh from 0 (the last two with a warning). Calling
+  this function on a conn the check never touched raises — the assign is the
+  contract.
 
   `opts` may carry `:keepalive_interval` in milliseconds (default 15 000);
   only tests override it.
@@ -246,7 +250,7 @@ defmodule Wymcp.Transport.Stream do
 
   defp stream(conn, session_pid, session_monitor, opts) do
     keepalive_interval = Map.get(opts, :keepalive_interval, @default_keepalive_interval)
-    last_event_id = List.first(get_req_header(conn, "last-event-id"))
+    last_event_id = conn.assigns[:wymcp_last_event_id]
     resumption = resume_counter(last_event_id)
     log_resumption(resumption, last_event_id)
 
@@ -445,29 +449,41 @@ defmodule Wymcp.Transport.Stream do
   defp event_id(counter), do: @event_id_prefix <> Integer.to_string(counter)
 
   # Last-Event-ID is raw client input; never assume the suffix is numeric.
-  # :fresh (no header) and :discard (malformed header) both resume from 0 —
-  # the shapes differ so the discard can be logged as the operator signal
-  # it is (a proxy mangling the header), while a well-formed `evt-0` stays
-  # a normal reconnect. Detection keys on parse failure, never counter == 0.
-  defp resume_counter(nil), do: :fresh
+  # :fresh (no header) and :discard (malformed or duplicated header) both
+  # resume from 0 — the shapes differ so the discard can be logged as the
+  # operator signal it is (a proxy mangling or repeating the header), while a
+  # well-formed `evt-0` stays a normal reconnect. Detection keys on parse
+  # failure, never counter == 0.
+  #
+  # The argument is Wymcp.Plugs.SingletonHeaders' assigned outcome, not a
+  # header value. There is no catch-all on purpose: an absent assign means the
+  # check did not run, and a crash beats resuming from a value nobody
+  # validated.
+  defp resume_counter(:missing), do: :fresh
 
-  defp resume_counter(@event_id_prefix <> suffix) do
+  defp resume_counter({:ok, @event_id_prefix <> suffix}) do
     case Integer.parse(suffix) do
       {value, ""} when value >= 0 -> {:resume, value}
       _ -> :discard
     end
   end
 
-  defp resume_counter(_last_event_id), do: :discard
+  defp resume_counter({:ok, _last_event_id}), do: :discard
 
-  defp log_resumption(:fresh, _header), do: :ok
+  defp resume_counter(:duplicated), do: :discard
 
-  defp log_resumption({:resume, _counter}, header) do
+  defp log_resumption(:fresh, _outcome), do: :ok
+
+  defp log_resumption({:resume, _counter}, {:ok, header}) do
     Logger.info("SSE stream reconnected, last_event_id=#{header}")
   end
 
-  defp log_resumption(:discard, header) do
+  defp log_resumption(:discard, {:ok, header}) do
     Logger.warning("SSE resumption point discarded, malformed last-event-id=#{header}")
+  end
+
+  defp log_resumption(:discard, :duplicated) do
+    Logger.warning("SSE resumption point discarded, duplicated Last-Event-ID header")
   end
 
   defp schedule_keepalive(interval) do
