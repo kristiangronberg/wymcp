@@ -33,6 +33,11 @@ contract it calls.
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
 
+**dirty tool list**
+Defined at its code home: the `Wymcp.Session` moduledoc, section "Tool list
+notifications".
+_Avoid_: stale tool list, pending notification
+
 **error dialect**
 The error-body convention an HTTP answer speaks. Wymcp has three
 structured dialects: the JSON-RPC dialect (the enveloped error object

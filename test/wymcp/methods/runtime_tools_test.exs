@@ -68,6 +68,33 @@ defmodule Wymcp.Methods.RuntimeToolsTest do
       tool_names = Enum.map(body["result"]["tools"], & &1["name"])
       assert "dynamic" in tool_names
     end
+
+    @tag doc: """
+         The clear, end to end through the router: serving tools/list is the
+         only thing that marks the dirty tool list clean. A failure means
+         Methods.ToolsList drifted back to Session.get_tools/1, which reads
+         without clearing — the client would be told the list changed
+         forever after one registration.
+         """
+    test "serving tools/list marks the dirty tool list clean" do
+      router_opts = Wymcp.Router.init(tools: [])
+
+      {session_id, headers} = initialize_session(router_opts)
+      {:ok, pid} = Session.lookup(session_id)
+
+      Session.register_tool(pid, DynamicTool)
+      assert Session.get_state(pid).tool_list_dirty
+
+      list_conn =
+        post_json(
+          %{"jsonrpc" => "2.0", "id" => 3, "method" => "tools/list"},
+          headers
+        )
+        |> Wymcp.Router.call(router_opts)
+
+      assert list_conn.status == 200
+      refute Session.get_state(pid).tool_list_dirty
+    end
   end
 
   describe "tools/call with runtime tools" do

@@ -6,7 +6,7 @@ defmodule Wymcp.Methods.ToolsList do
 
   def run(%Plug.Conn{} = conn, _compile_tools) do
     request = conn.body_params
-    tools = Session.get_tools(conn.assigns[:wymcp_session_pid])
+    tools = Session.get_tools_for_list(conn.assigns[:wymcp_session_pid])
     version = Session.negotiated_version(conn)
 
     tool_definitions =

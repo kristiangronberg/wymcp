@@ -70,7 +70,7 @@ Reference: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 | `outputSchema` + `structuredContent`                   | MAY                         | ✅ Tools define `output_schema/0`, validated on return *(emitted on ≥ 2025-06-18 sessions; stripped for 2025-03-26)* |
 | Runtime tool registration                              | N/A (wymcp extension)       | ✅ `Session.register_tool/2`, `unregister_tool/2`          |
 | Pagination (`cursor` / `nextCursor`)                   | SHOULD                      | ❌                                                         |
-| `listChanged` capability + notification                | MAY                         | ✅ Advertised in capabilities, sent on register/unregister |
+| `listChanged` capability + notification                | MAY                         | ✅ Advertised in capabilities; sent on a change to the tool list `tools/list` would serve, and on stream attach when one is owed |
 | Tool `title` field                                     | MAY                         | ✅ Optional callback *(included on ≥ 2025-06-18 sessions; stripped for 2025-03-26)* |
 | Tool `icons` field (array: `src`, `mimeType`, `sizes`) | MAY                         | ❌                                                         |
 | Tool `annotations` (audience, priority, etc.)          | MAY                         | ✅ Optional callback, included in `definition()`           |
@@ -237,7 +237,7 @@ validation and route to `Methods.DeliverResponse`.
 - SSE transport: `Transport.Stream` with keepalive, bidirectional messaging
 - Tools: `tools/list`, `tools/call` with `outputSchema` + `structuredContent`
 - Tool metadata: optional `title/0` and `annotations/0` callbacks on `Wymcp.Tool`
-- `listChanged` capability advertised; `notifications/tools/list_changed` sent on register/unregister
+- `listChanged` capability advertised; `notifications/tools/list_changed` sent on a change to the tool list `tools/list` would serve, and on stream attach when one is owed
 - Runtime tool registration/unregistration per session
 - Server callbacks: `Wymcp.Server` behaviour with `init/2` and `terminate/2`
 - Context bridge: session assigns + conn.assigns merged into `%Context{}`

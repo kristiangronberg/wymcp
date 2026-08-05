@@ -696,6 +696,63 @@ defmodule Wymcp.IntegrationTest do
     end
 
     @tag doc: """
+         The attach send through the real Transport.Stream: serve/3
+         registers the stream from the stream's own process, which is what
+         orders the notification behind the priming event. The fake-stream
+         cases cannot reach that ordering — their caller is the test
+         process — so this is the only test that would catch a change to how
+         serve/3 registers, or a send moved ahead of the priming write. A
+         failure showing only the priming event means the attach sent
+         nothing; a failure on the frame order means the client's SSE event
+         sequence starts with a notification it cannot place.
+         """
+    test "a real stream attaching receives the owed notification after the priming event" do
+      router_opts = Wymcp.Router.init(tools: [], server: ToolRegistrationServer)
+      {session_id, headers} = initialize_session(router_opts, "attach-notification")
+
+      notif_conn =
+        post_request(
+          router_opts,
+          %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},
+          headers
+        )
+
+      assert notif_conn.status == 200
+
+      {:ok, session_pid} = Session.lookup(session_id)
+      assert Session.get_state(session_pid).tool_list_dirty
+
+      test_pid = self()
+
+      stream_task =
+        Task.async(fn ->
+          result_conn =
+            conn(:get, "/")
+            |> put_req_header("mcp-session-id", session_id)
+            |> Wymcp.Router.call(router_opts)
+
+          send(test_pid, {:stream_done, result_conn})
+          result_conn
+        end)
+
+      wait_for_stream(session_pid, 2000)
+      Session.terminate_session(session_id)
+
+      assert_receive {:stream_done, stream_conn}, 2000
+      assert stream_conn.status == 200
+
+      # Exact prefix, not containment: the priming event must be first and
+      # the notification must be the very next frame, with the event ids in
+      # sequence. The no-notification form of this assertion is the
+      # exact-equality one at :449.
+      assert "id: evt-1\ndata: \n\nid: evt-2\ndata: " <> rest = stream_conn.resp_body
+      [notification_json | _] = String.split(rest, "\n\n")
+      assert %{"method" => "notifications/tools/list_changed"} = JSON.decode!(notification_json)
+
+      Task.await(stream_task, 1000)
+    end
+
+    @tag doc: """
          Registration validation (D12, 2026-07-28-introspection-simplification)
          raises inside the consumer's Server.init/2, which runs inside the
          notifications/initialized request. A failure here means the raise
@@ -938,6 +995,25 @@ defmodule Wymcp.IntegrationTest do
           Process.sleep(20)
           wait_loop(session_pid, deadline)
       end
+    end
+  end
+
+  defp wait_for_stream(session_pid, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    wait_for_stream_loop(session_pid, deadline)
+  end
+
+  defp wait_for_stream_loop(session_pid, deadline) do
+    cond do
+      is_pid(Session.get_state(session_pid).stream_pid) ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("the SSE stream did not register within the deadline")
+
+      true ->
+        Process.sleep(20)
+        wait_for_stream_loop(session_pid, deadline)
     end
   end
 end

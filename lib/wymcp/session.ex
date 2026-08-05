@@ -96,6 +96,79 @@ defmodule Wymcp.Session do
       AckPending --> [*] : early deliver_response — caller answered, late ack dropped
       AwaitingResponse --> [*] : deliver_response / server_request_timeout — caller answered
   ```
+
+  ## Tool list notifications
+
+  `listChanged` is declared unconditionally at initialize, so the session
+  owes the client a `notifications/tools/list_changed` whenever the list
+  `tools/list` would serve changes. The obligation is carried by session
+  state rather than by the wire: the **dirty tool list** — `State`'s
+  `tool_list_dirty` field — is whether the client's tool list is behind
+  the session's, that is, the list `tools/list` would serve changed and
+  the client has not fetched it since.
+
+  State carries it because the change usually has nowhere to go.
+  `c:Wymcp.Server.init/2` runs during `notifications/initialized`, before
+  the client opens its GET stream, so a notification sent at registration
+  time would be dropped on most sessions that register tools at all.
+
+  Four rules, and the reason for each:
+
+  - **A real change to the served list marks the flag** — not merely a call
+    to `register_tool/2` or `unregister_tool/2`. The definition above should
+    be true as written rather than true-with-an-asterisk, and a spurious
+    mark is not free: it survives until the client lists, and buys one
+    further notification per stream attach until then. So the comparison is
+    made over `merge_tools/1`'s output, not over `runtime_tools`: order is
+    not part of the `tools/list` contract, so a re-registration that only
+    reorders is not a change — and neither is registering a module that is
+    already a compile-time tool, which shifts the module between the two
+    lists without changing what the client is served. What is conditional
+    is the mark, not the registration: those calls still take effect on
+    `runtime_tools`, they just leave the client nothing to fetch.
+  - **The notification fires on the clean → dirty rising edge only.** While
+    the flag is already set the client still owes itself a `tools/list`, so
+    a second notification tells it nothing new — a batch of registrations
+    coalesces into one. Nothing is lost, because the flag, not the
+    notification, carries the obligation.
+  - **A stream attaching sends the notification if the flag is still set,
+    and does not clear it.** This is the deferred case above, discharged.
+    Two attaches without an intervening `tools/list` therefore produce two
+    notifications; the notification is payload-free and idempotent, and a
+    client honouring `listChanged` lists after the first one.
+  - **Only `get_tools_for_list/1` — the read `tools/list` is served from —
+    marks the flag clean.** A push ack cannot: the stream loop answers `:ok`
+    when the chunk reached the socket buffer, and a just-died peer's socket
+    accepts one more write, so clearing on an ack would clear exactly when
+    the notification was lost. Serving the list is the only proof the
+    protocol offers, JSON-RPC notifications being unacknowledged by
+    definition. The notification is therefore a pure optimization — a nudge
+    to list sooner — and losing one costs nothing.
+
+  ```mermaid
+  stateDiagram-v2
+      [*] --> Clean : session start
+
+      Clean --> Dirty : served tool list changed — notification sent if a stream is attached
+      Dirty --> Dirty : served tool list changed again — marked, nothing sent
+      Dirty --> Dirty : stream attach — notification sent, flag kept
+      Clean --> Clean : stream attach — nothing owed, nothing sent
+      Dirty --> Clean : get_tools_for_list/1 — tools/list served
+  ```
+
+  The read and the clear share one handler, and both are `handle_call`s on
+  this GenServer, so they serialize. That gives the invariant the design
+  rests on: **flag clean implies the client's last-served tool list is
+  current.** A change either precedes the read — and is in the list that was
+  served — or follows the clear, and marks the flag on its own message.
+
+  One thing the invariant does not cover: a notification and a `tools/list`
+  response are not ordered against each other, because they travel on
+  different channels — the SSE stream and the POST response. A change
+  landing between the clear and the response write sends its notification
+  ahead of the response it invalidates. The session's state is right either
+  way (the flag is dirty again), and the client's is repaired at its next
+  stream attach.
   """
 
   use GenServer, restart: :temporary
@@ -143,7 +216,8 @@ defmodule Wymcp.Session do
       assigns: %{},
       pending_requests: %{},
       pending_server_requests: %{},
-      runtime_tools: []
+      runtime_tools: [],
+      tool_list_dirty: false
     ]
 
     @type t :: %__MODULE__{
@@ -174,7 +248,12 @@ defmodule Wymcp.Session do
             log_level: String.t() | nil,
             runtime_tools: [module()],
             stream_pid: pid() | nil,
-            stream_monitor_ref: reference() | nil
+            stream_monitor_ref: reference() | nil,
+            # The dirty tool list — defined in the moduledoc's "Tool list
+            # notifications" section. Marked by a real change to the served
+            # list — merge_tools/1's output, not runtime_tools (D4a) —
+            # cleared only by the read tools/list is served from.
+            tool_list_dirty: boolean()
           }
   end
 
@@ -310,6 +389,13 @@ defmodule Wymcp.Session do
   answers `notifications/initialized` with a JSON-RPC `internal_error` —
   the same treatment `init/2` returning `{:error, reason}` gets. Registering
   from anywhere else, the `ArgumentError` is yours to handle.
+
+  A registration that actually changes the tool list this session would
+  serve marks the dirty tool list — see the "Tool list notifications"
+  section of this module. Registering a module that is already serving
+  under that name — whether it was registered here or passed in as a
+  compile-time tool — takes effect as usual but leaves the served list
+  identical, so it marks nothing and sends nothing.
   """
   def register_tool(pid, tool_module) do
     validate_registerable!(tool_module)
@@ -322,6 +408,10 @@ defmodule Wymcp.Session do
   Has no effect on compile-time tools — those are always present. Only
   tools added via `register_tool/2` can be removed. Returns `:ok` even
   if no tool with the given name was registered.
+
+  Removing a tool that was registered marks the dirty tool list — see the
+  "Tool list notifications" section of this module. An unknown name changes
+  nothing and marks nothing.
 
       # Revoke admin access mid-session
       Wymcp.Session.unregister_tool(session_pid, "administer_users")
@@ -337,6 +427,22 @@ defmodule Wymcp.Session do
   """
   def get_tools(pid) do
     GenServer.call(pid, :get_tools)
+  end
+
+  @doc """
+  Returns the merged tool list and marks the dirty tool list clean in the
+  same handler — the read `tools/list` is served from.
+
+  Separate from `get_tools/1` because the clear is the point, and every
+  site that clears must be findable by this name alone: serving the client
+  the list is the only proof it is current, so clearing from a caller that
+  never shows the client a list is a silent staleness bug. Callers that
+  read the tool set without showing it — `tools/call`, the help tool — use
+  `get_tools/1`, which does not clear. See the "Tool list notifications"
+  section of this module.
+  """
+  def get_tools_for_list(pid) do
+    GenServer.call(pid, :get_tools_for_list)
   end
 
   @log_levels ~w(debug info notice warning error critical alert emergency)
@@ -553,16 +659,12 @@ defmodule Wymcp.Session do
       |> Enum.reject(&(&1.name() == tool_module.name()))
       |> then(&[tool_module | &1])
 
-    state = %{state | runtime_tools: runtime_tools}
-    notify_tools_list_changed(state)
-    {:reply, :ok, state}
+    {:reply, :ok, apply_tool_change(state, runtime_tools)}
   end
 
   def handle_call({:unregister_tool, tool_name}, _from, state) do
     runtime_tools = Enum.reject(state.runtime_tools, &(&1.name() == tool_name))
-    state = %{state | runtime_tools: runtime_tools}
-    notify_tools_list_changed(state)
-    {:reply, :ok, state}
+    {:reply, :ok, apply_tool_change(state, runtime_tools)}
   end
 
   def handle_call({:set_log_level, level}, _from, state) when level in @log_levels do
@@ -577,12 +679,40 @@ defmodule Wymcp.Session do
     {:reply, merge_tools(state), state}
   end
 
+  def handle_call(:get_tools_for_list, _from, state) do
+    {:reply, merge_tools(state), %{state | tool_list_dirty: false}}
+  end
+
   def handle_call({:register_stream, stream_pid}, _from, state) when is_pid(stream_pid) do
     if Process.alive?(stream_pid) do
       if state.stream_monitor_ref, do: Process.demonitor(state.stream_monitor_ref, [:flush])
       stop_replaced_stream(state.stream_pid, stream_pid)
       ref = Process.monitor(stream_pid)
-      {:reply, :ok, %{state | stream_pid: stream_pid, stream_monitor_ref: ref}}
+      state = %{state | stream_pid: stream_pid, stream_monitor_ref: ref}
+      # Last, and only after the state update: the branch's earlier steps
+      # still see the stream on its way out, so a send placed among them
+      # would address the wrong pid. Addressed through the stream_pid
+      # parameter rather than state.stream_pid for the same reason from the
+      # other side — the parameter is bound once at the head and says the
+      # newly registered stream no matter where in the branch the send ends
+      # up. Not on the dead-pid branch below — that pid runs no loop, so the
+      # push would queue in a mailbox nobody drains; leaving the flag set
+      # lets the real stream's attach discharge it. The send does not clear
+      # the flag (only a served tools/list does), so re-registering the same
+      # pid — Bandit reuses a connection process across sequential requests,
+      # and that case lands here, since stop_replaced_stream(same, same) is
+      # a no-op — sends again. That is honest: the flag means the client has
+      # not listed. Mailbox ordering puts this push behind the priming
+      # event: this is a call handler, the send happens before the reply,
+      # and the caller's selective receive takes only the reply. That
+      # ordering holds only because the caller of this handler IS the stream
+      # process — register_stream/2's @doc states that as the calling
+      # convention ("The stream calls this from its own GET request
+      # process"). A caller registering some other process would put the
+      # push and the reply in different mailboxes, and nothing here would
+      # order them.
+      if state.tool_list_dirty, do: send_tools_list_changed(stream_pid)
+      {:reply, :ok, state}
     else
       # A dead pid here is a poison message: GET1's register call timed
       # out (a busy session) and GET1's process died; GET2 registered and
@@ -751,9 +881,54 @@ defmodule Wymcp.Session do
 
   # -- Notifications --
 
-  defp notify_tools_list_changed(%{stream_pid: nil}), do: :ok
+  # D4/D4a: the dirty tool list follows the CHANGE, not the call — and
+  # "changed" means the list tools/list would SERVE differs, which is what
+  # the flag's definition is about. Comparing merged sets rather than
+  # runtime_tools matters in one case that is neither hypothetical nor
+  # rare: registering a module that is already a compile-time tool moves it
+  # between the two lists (merge_tools/1 then drops the compile-time entry
+  # it shadows) without changing a byte of what the client is served.
+  # Sets, not lists, because order is not part of the tools/list contract.
+  # A spurious mark is not free under D1: it survives until the client
+  # lists, and buys one notification per stream attach until then.
+  defp apply_tool_change(state, runtime_tools) do
+    next = %{state | runtime_tools: runtime_tools}
 
-  defp notify_tools_list_changed(%{stream_pid: stream_pid}) do
+    # Both branches return next: the caller's runtime_tools is always
+    # accepted, and only the mark — with the notification it carries — is
+    # conditional. next differs from state in runtime_tools alone, so the
+    # equal branch records the call without marking. Returning state here
+    # instead would drop the registration itself whenever the served list
+    # came out the same, against register_tool/2's own promise that a
+    # second registration replaces the first.
+    if MapSet.new(merge_tools(next)) == MapSet.new(merge_tools(state)) do
+      next
+    else
+      mark_tool_list_dirty(next)
+    end
+  end
+
+  # D2: send on the clean → dirty rising edge only. While the flag is
+  # already set the client still owes itself a tools/list, so a second
+  # notification tells it nothing new — a batch of registrations coalesces
+  # into one. Nothing is lost: the flag, not the notification, carries the
+  # obligation, so a suppressed change is still recorded and repaired at
+  # the next attach.
+  defp mark_tool_list_dirty(%{tool_list_dirty: true} = state), do: state
+
+  defp mark_tool_list_dirty(state) do
+    send_tools_list_changed(state.stream_pid)
+    %{state | tool_list_dirty: true}
+  end
+
+  # :none, still: under the dirty tool list this push is a pure
+  # optimization, so nobody reads its ack. An :ok ack would prove only that
+  # the chunk reached the socket buffer — a just-died peer accepts one more
+  # write — and clearing on that would clear exactly when the notification
+  # was lost. Only a served tools/list clears the flag.
+  defp send_tools_list_changed(nil), do: :ok
+
+  defp send_tools_list_changed(stream_pid) do
     Transport.Stream.push(stream_pid, @tools_list_changed_json, :none)
     :ok
   end

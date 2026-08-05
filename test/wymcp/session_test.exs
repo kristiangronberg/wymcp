@@ -43,6 +43,64 @@ defmodule Wymcp.SessionTest do
     end
   end
 
+  defmodule OtherRuntimeTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    @impl true
+    def name, do: "other_runtime_tool"
+
+    @impl true
+    def description, do: "A second tool registered at runtime"
+
+    @impl true
+    def actions do
+      %{
+        run: %{
+          description: "Run",
+          properties: %{},
+          required: [],
+          defaults: %{}
+        }
+      }
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx) do
+      {:ok, %{result: "other runtime"}}
+    end
+  end
+
+  defmodule ShadowingRuntimeTool do
+    @moduledoc false
+    use Wymcp.Tool
+
+    # Deliberately the same name as RuntimeTool, a different module: the
+    # D4a case where the served list changes without the count changing.
+    @impl true
+    def name, do: "runtime_tool"
+
+    @impl true
+    def description, do: "A different module claiming RuntimeTool's name"
+
+    @impl true
+    def actions do
+      %{
+        run: %{
+          description: "Run",
+          properties: %{},
+          required: [],
+          defaults: %{}
+        }
+      }
+    end
+
+    @impl Wymcp.Tool
+    def run_action(:run, _data, _ctx) do
+      {:ok, %{result: "shadowing"}}
+    end
+  end
+
   defmodule ReservedNameRuntimeTool do
     @moduledoc false
     use Wymcp.Tool
@@ -345,10 +403,28 @@ defmodule Wymcp.SessionTest do
       Process.exit(stream_pid, :normal)
     end
 
+    @tag doc: """
+         Pins the unregister's own notification, which needs the flag to be
+         clean first: attach, register (the rising edge), consume that
+         notification and clear the flag with a tools/list read, and only
+         then unregister. Written this way because the obvious ordering —
+         register, attach, unregister — makes the assertion match the
+         attach's notification instead, and passes while proving nothing
+         about unregister_tool/2.
+         """
     test "unregister_tool/2 pushes listChanged notification" do
       {:ok, pid, _id} = start_session()
-      Session.register_tool(pid, RuntimeTool)
       stream_pid = spawn_fake_stream(pid)
+      Session.register_tool(pid, RuntimeTool)
+
+      assert_receive {:fake_stream_push,
+                      %{
+                        "jsonrpc" => "2.0",
+                        "method" => "notifications/tools/list_changed"
+                      }},
+                     1000
+
+      Session.get_tools_for_list(pid)
 
       Session.unregister_tool(pid, "runtime_tool")
 
@@ -365,6 +441,213 @@ defmodule Wymcp.SessionTest do
     test "register_tool/2 succeeds even without a stream" do
       {:ok, pid, _id} = start_session()
       assert :ok = Session.register_tool(pid, RuntimeTool)
+    end
+
+    @tag doc: """
+         The topic's whole case: Server.init/2 registers tools during
+         notifications/initialized, before the client opens its GET stream,
+         so the change has nowhere to send. A failure means the obligation
+         is being dropped again instead of recorded — the notification is
+         lost and no stream attach will repair it.
+         """
+    test "register_tool/2 marks the dirty tool list when no stream is attached" do
+      {:ok, pid, _id} = start_session()
+
+      assert :ok = Session.register_tool(pid, RuntimeTool)
+
+      assert Session.get_state(pid).tool_list_dirty
+    end
+
+    @tag doc: """
+         D4: the flag follows the change, not the call. Before this topic an
+         unknown-name unregister notified anyway; under the dirty tool list
+         that quirk costs more than one spurious notification — it leaves
+         the flag set until the client lists, and buys one notification per
+         stream attach until then. A failure means the handler is marking on
+         the call rather than comparing the list tools/list would serve.
+         """
+    test "unregister_tool/2 with an unregistered name changes nothing" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn_fake_stream(pid)
+
+      assert :ok = Session.unregister_tool(pid, "never_registered")
+
+      refute_receive {:fake_stream_push, _}, 100
+      refute Session.get_state(pid).tool_list_dirty
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    test "register_tool/2 with the module already registered changes nothing" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn_fake_stream(pid)
+
+      Session.register_tool(pid, RuntimeTool)
+      assert_receive {:fake_stream_push, _}, 1000
+      Session.get_tools_for_list(pid)
+
+      assert :ok = Session.register_tool(pid, RuntimeTool)
+
+      refute_receive {:fake_stream_push, _}, 100
+      refute Session.get_state(pid).tool_list_dirty
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         D4a, the case that made the trigger the served list rather than the
+         runtime tool set: registering a module that is ALREADY a
+         compile-time tool moves it between the two lists — merge_tools/1
+         drops the compile-time entry it now shadows — so the client is
+         served exactly the same modules and owes nothing. A failure means
+         the comparison drifted back to runtime_tools, which marks here and
+         then owes one notification per stream attach until the client
+         lists, for a list that never changed. Supported pattern, not a
+         corner case: register_tool/2's @doc documents runtime tools taking
+         precedence on name collision, and that is how Server.init/2
+         overrides a default tool with a user-specific variant.
+
+         "Changes nothing" is about the wire, not the bookkeeping — hence
+         the last assertion. apply_tool_change/2 decides two things, whether
+         to accept the new runtime_tools and whether to mark, and only the
+         second is conditional; this is the only case in the suite where the
+         two come apart, so a failure on that line means they got fused and
+         a successful register_tool/2 left no trace of itself.
+         """
+    test "register_tool/2 with a module that is already a compile-time tool changes nothing" do
+      {:ok, pid, _id} = Session.start_session(Testing.build_session_opts(tools: [RuntimeTool]))
+      stream_pid = spawn_fake_stream(pid)
+
+      assert :ok = Session.register_tool(pid, RuntimeTool)
+
+      refute_receive {:fake_stream_push, _}, 100
+      refute Session.get_state(pid).tool_list_dirty
+      assert Session.get_state(pid).runtime_tools == [RuntimeTool]
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         D4a's discriminating counterpart, and the reason the test above is
+         not satisfied by a predicate that simply never marks once
+         compile-time tools exist: a DIFFERENT module claiming a
+         compile-time tool's name swaps which module the client is served
+         under that name, so the served set really did change. The list
+         length is identical throughout — a count-based check would miss
+         this, which is why the comparison is over sets of modules.
+         """
+    test "register_tool/2 with a different module shadowing a compile-time name marks the flag" do
+      {:ok, pid, _id} = Session.start_session(Testing.build_session_opts(tools: [RuntimeTool]))
+      stream_pid = spawn_fake_stream(pid)
+
+      assert :ok = Session.register_tool(pid, ShadowingRuntimeTool)
+
+      assert_receive {:fake_stream_push, %{"method" => "notifications/tools/list_changed"}},
+                     1000
+
+      assert Session.get_state(pid).tool_list_dirty
+      assert Session.get_tools(pid) == [ShadowingRuntimeTool]
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         The mirror of the case above, and the last row of D4a's table:
+         unregistering the module that was shadowing a compile-time tool
+         lets that compile-time tool reappear in the served list, so the
+         change is real even though nothing was added. The list holds one
+         entry throughout, so a count-based check misses this exactly as it
+         misses the register-side case — and this is the unregister
+         handler's half of the shared comparison, the only place removal is
+         shown to change the served set rather than shrink it.
+         """
+    test "unregister_tool/2 removing a shadow reveals the compile-time tool it shadowed" do
+      {:ok, pid, _id} = Session.start_session(Testing.build_session_opts(tools: [RuntimeTool]))
+      stream_pid = spawn_fake_stream(pid)
+
+      Session.register_tool(pid, ShadowingRuntimeTool)
+      assert_receive {:fake_stream_push, _}, 1000
+      Session.get_tools_for_list(pid)
+
+      assert :ok = Session.unregister_tool(pid, "runtime_tool")
+
+      assert_receive {:fake_stream_push, %{"method" => "notifications/tools/list_changed"}},
+                     1000
+
+      assert Session.get_state(pid).tool_list_dirty
+      assert Session.get_tools(pid) == [RuntimeTool]
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         D2: the notification fires on the clean → dirty rising edge only, so
+         a batch of registrations on a live stream sends one notification
+         instead of N. Safe because the flag, not the notification, carries
+         the obligation — the suppressed change is still recorded. A failure
+         means the coalescing is gone and the wire shows one notification per
+         call again.
+         """
+    test "a second change while the flag is already dirty sends nothing" do
+      {:ok, pid, _id} = start_session()
+      stream_pid = spawn_fake_stream(pid)
+
+      Session.register_tool(pid, RuntimeTool)
+      assert_receive {:fake_stream_push, _}, 1000
+
+      Session.register_tool(pid, OtherRuntimeTool)
+
+      refute_receive {:fake_stream_push, _}, 100
+      assert Session.get_state(pid).tool_list_dirty
+
+      Process.exit(stream_pid, :normal)
+    end
+  end
+
+  describe "get_tools_for_list/1" do
+    test "returns the same merged list as get_tools/1" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+
+      assert Session.get_tools_for_list(pid) == Session.get_tools(pid)
+    end
+
+    @tag doc: """
+         The clear is the whole reason this read exists, and it is atomic
+         with the read because both are handle_calls sharing one handler:
+         flag clean implies the client's last-served list is current. A
+         failure means the clear drifted away from the read — either the
+         list is served without clearing (the client is told nothing changed
+         forever) or the clear happens somewhere the client never saw a
+         list, which is the silent staleness bug the flag exists to prevent.
+         """
+    test "marks the dirty tool list clean" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+      assert Session.get_state(pid).tool_list_dirty
+
+      Session.get_tools_for_list(pid)
+
+      refute Session.get_state(pid).tool_list_dirty
+    end
+
+    test "a change after the list marks the flag dirty again" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+      Session.get_tools_for_list(pid)
+
+      Session.unregister_tool(pid, "runtime_tool")
+
+      assert Session.get_state(pid).tool_list_dirty
+    end
+
+    test "get_tools/1 does not mark the dirty tool list clean" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+
+      Session.get_tools(pid)
+
+      assert Session.get_state(pid).tool_list_dirty
     end
   end
 
@@ -518,6 +801,134 @@ defmodule Wymcp.SessionTest do
 
       refute_receive {:stream_replaced, ^stream_pid}, 50
       assert Session.get_state(pid).stream_pid == stream_pid
+    end
+
+    @tag doc: """
+         The deferred notification, discharged. Server.init/2 registers tools
+         before the client's GET exists, so the change marks the flag with
+         nowhere to send; the attach is where the session finally has
+         somewhere. A failure means the declared listChanged capability is a
+         promise the wire breaks again on every session that registers tools
+         at init.
+         """
+    test "register_stream/2 sends the owed notification, exactly once" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+
+      stream_pid = spawn_fake_stream(pid)
+
+      assert_receive {:fake_stream_push,
+                      %{
+                        "jsonrpc" => "2.0",
+                        "method" => "notifications/tools/list_changed"
+                      }},
+                     1000
+
+      refute_receive {:fake_stream_push, _}, 100
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    test "register_stream/2 sends nothing when the dirty tool list is clean" do
+      {:ok, pid, _id} = start_session()
+
+      stream_pid = spawn_fake_stream(pid)
+
+      refute_receive {:fake_stream_push, _}, 100
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         The attach does not clear the flag (D1): only a served tools/list
+         proves the client saw the list. So a client that takes the
+         notification and never lists gets one per attach — accepted residue,
+         and the reason the notification is payload-free and idempotent. A
+         failure in the other direction (nothing on the second attach) means
+         the attach started clearing, which loses the obligation on every
+         reconnect where the client never listed.
+
+         It is also the suite's only pin on WHICH pid the attach addresses
+         (rule 5): the send must reach the stream just registered, not the
+         one being replaced. Both streams stay alive here — a replaced fake
+         is only told :replaced, and this one does not act on it — and
+         spawn_fake_stream/1 would have both forwarding indistinguishable
+         pushes to this same mailbox, so a send that drifted above the state
+         update and addressed the outgoing stream would still satisfy an
+         untagged assertion. Tagging each push with the forwarding stream's
+         own pid is what makes the assertion discriminate; the refute below
+         it says the replaced stream got nothing at all.
+         """
+    test "a second attach without an intervening tools/list sends again" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+
+      first_stream = spawn_tagged_stream(pid)
+      assert_receive {:tagged_stream_push, ^first_stream, _}, 1000
+
+      second_stream = spawn_tagged_stream(pid)
+
+      assert_receive {:tagged_stream_push, ^second_stream,
+                      %{"method" => "notifications/tools/list_changed"}},
+                     1000
+
+      refute_receive {:tagged_stream_push, ^first_stream, _}, 100
+
+      Process.exit(first_stream, :normal)
+      Process.exit(second_stream, :normal)
+    end
+
+    @tag doc: """
+         Rule 7: re-registering the pid that is already registered takes the
+         LIVE branch — stop_replaced_stream(same, same) is a no-op but the
+         branch still runs — so it sends again. Real in production, not
+         theoretical: Bandit's connection process serves sequential requests,
+         so a second GET on a reused connection arrives with the pid the
+         first one registered. Sending is honest, because the flag means the
+         client has not listed; a guard against it would add a branch for no
+         correctness gain.
+         """
+    test "re-registering the already-registered stream pid sends again" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+
+      stream_pid = spawn_fake_stream(pid)
+      assert_receive {:fake_stream_push, _}, 1000
+
+      assert :ok = Session.register_stream(pid, stream_pid)
+
+      assert_receive {:fake_stream_push, %{"method" => "notifications/tools/list_changed"}},
+                     1000
+
+      Process.exit(stream_pid, :normal)
+    end
+
+    @tag doc: """
+         The dead-pid guard branch must not send: that pid runs no loop, so
+         the push would queue in a mailbox nobody drains and the flag would
+         be spent on nothing. Leaving it set is what lets the real stream's
+         attach discharge it — which is what this test actually asserts,
+         since a send into a dead process is otherwise unobservable.
+         """
+    test "register_stream/2 with a dead pid leaves the notification owed" do
+      {:ok, pid, _id} = start_session()
+      Session.register_tool(pid, RuntimeTool)
+
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      # :normal when the monitor won the race, :noproc when the pid was
+      # already gone — either way the pid is now provably dead.
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _reason}
+
+      assert :ok = Session.register_stream(pid, dead_pid)
+      assert Session.get_state(pid).tool_list_dirty
+
+      stream_pid = spawn_fake_stream(pid)
+
+      assert_receive {:fake_stream_push, %{"method" => "notifications/tools/list_changed"}},
+                     1000
+
+      Process.exit(stream_pid, :normal)
     end
 
     @tag doc: """
@@ -1173,6 +1584,26 @@ defmodule Wymcp.SessionTest do
     do: send(session_pid, {:push_ack, tag, result})
 
   defp answer_fake_push(:none, _result), do: :ok
+
+  # A fake stream that names itself in what it forwards. Two of these can
+  # be told apart in one test mailbox, which is what pins the pid the
+  # attach send addresses; spawn_fake_stream/1's payload cannot. No
+  # answer_fake_push/2 here: the notification pushes with :none, so there
+  # is no reply to give.
+  defp spawn_tagged_stream(session_pid) do
+    test_pid = self()
+    stream_pid = spawn(fn -> tagged_receive_loop(test_pid) end)
+    Session.register_stream(session_pid, stream_pid)
+    stream_pid
+  end
+
+  defp tagged_receive_loop(test_pid) do
+    receive do
+      {:push, _reply_to, json} ->
+        send(test_pid, {:tagged_stream_push, self(), JSON.decode!(json)})
+        tagged_receive_loop(test_pid)
+    end
+  end
 
   defp start_session do
     Session.start_session(Testing.build_session_opts(tools: start_session_tools()))

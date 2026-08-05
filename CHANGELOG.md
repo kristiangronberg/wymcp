@@ -43,6 +43,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists; `http_method` is what distinguishes a GET/DELETE reject from a
   POST reject whose body did not parse. Telemetry metadata is a map, so a
   handler that does not read the key is unaffected. See `Wymcp.Telemetry`.
+- The **dirty tool list** — one boolean of session state recording whether
+  the client's tool list is behind the session's.
+  `notifications/tools/list_changed` used to be dropped whenever no SSE
+  stream was attached, which is the common case: consumers register tools
+  inside `c:Wymcp.Server.init/2`, during `notifications/initialized` and
+  before the client opens its GET stream, so the declared
+  `tools.listChanged: true` capability was a promise the wire broke on most
+  sessions that register tools at all. A change to the tool list the session
+  would serve now marks the flag whether or not a stream is attached, and a stream
+  attaching sends the notification the session still owes. The flag, not
+  the notification, carries the obligation, so a lost notification costs
+  nothing — it is repaired at the next attach. See the "Tool list
+  notifications" section of `Wymcp.Session`.
+- `Wymcp.Session.get_tools_for_list/1` — the merged tool list plus an
+  atomic clear of the dirty tool list, in one handler. `tools/list` reads
+  through it; `tools/call` and the help tool keep `get_tools/1`, which does
+  not clear. Serving the client the list is the only proof it is current,
+  which is why the clearing read carries its own name.
 
 ### Changed
 
@@ -112,6 +130,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected request no longer touches the session: the idle timer is not
   reset and the registered SSE stream is not displaced — possession of a
   session ID alone no longer keeps a session alive or hijacks its stream.
+- `notifications/tools/list_changed` now fires on the clean → dirty rising
+  edge only, so a batch of registrations on a live stream sends one
+  notification instead of one per call. Serving `tools/list` is the only
+  thing that clears the flag: a push ack cannot, because the stream loop
+  answers `:ok` when the chunk reached the socket buffer, and a just-died
+  peer's socket accepts one more write.
+- `Wymcp.Session.unregister_tool/2` with a name that was never registered,
+  and `register_tool/2` with the module already serving under that name, no
+  longer send `notifications/tools/list_changed`. The trigger is a change to
+  the set of tool modules `tools/list` would serve, not the call — so
+  registering a module that is already a compile-time tool is silent too
+  (it only moves the module between the runtime and compile-time lists,
+  which `Wymcp.Session.get_tools/1` merges to the same result). Both still
+  return `:ok`.
 
 ### Fixed
 
