@@ -78,8 +78,9 @@ defmodule Wymcp.Plugs.SingletonHeaders do
   nothing on the wire — degrade never rejects.
 
   Rejections speak the route's error dialect via the `:error_dialect` init
-  option (`:json_rpc` by default, `:plain_json` on GET/DELETE) and echo the
-  id `Wymcp.Response.rejection_id/1` gives.
+  option (`:json_rpc` by default, `:plain_json` on GET/DELETE); their id comes
+  from `Wymcp.Response.send_rejection/4`, which derives it rather than taking
+  it from this plug.
   """
 
   import Plug.Conn
@@ -125,6 +126,6 @@ defmodule Wymcp.Plugs.SingletonHeaders do
   defp reject(conn, display_name, dialect) do
     message = "Duplicated #{display_name} header. Send exactly one #{display_name} header."
 
-    Response.send_error(conn, 400, Response.rejection_id(conn), message, dialect)
+    Response.send_rejection(conn, 400, message, dialect)
   end
 end

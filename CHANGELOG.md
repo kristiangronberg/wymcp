@@ -61,13 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through it; `tools/call` and the help tool keep `get_tools/1`, which does
   not clear. Serving the client the list is the only proof it is current,
   which is why the clearing read carries its own name.
-- `Wymcp.Response.send_error/5` — the shared rejection sender, taking the
+- `Wymcp.Response.send_rejection/4` — the shared rejection sender, taking the
   error dialect as a parameter, plus `Wymcp.Response.rejection_id/1`, the one
-  rule for what id a rejection envelope echoes. The three wire checks and
-  `Wymcp.Plugs.Session`'s 400s now route through it; the private two-clause
-  dialect switches in `Wymcp.Plugs.Auth` and `Wymcp.Plugs.OriginCheck` are
-  gone, and with them the asymmetry where one hardcoded 401 in both clauses
-  while the other threaded status as a parameter.
+  rule for what id a rejection envelope echoes: the body's `id` on a JSON-RPC
+  request, `nil` on every other message kind. The sender derives the id itself,
+  so no call site passes one. The three wire checks and `Wymcp.Plugs.Session`'s
+  400s route through it; the private two-clause dialect switches in
+  `Wymcp.Plugs.Auth` and `Wymcp.Plugs.OriginCheck` are gone, and with them the
+  asymmetry where one hardcoded 401 in both clauses while the other threaded
+  status as a parameter.
 
 ### Changed
 
@@ -210,18 +212,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout, or crash — is now simply gone: `lookup/1` answers
   `{:error, :not_found}`, the wire answers 404 + `-32001`, the client
   re-initializes.
-- A JSON-RPC **response** message rejected for a missing **or duplicated**
-  `Mcp-Session-Id` header no longer echoes the message's `id`. That id was
-  minted by the *server* for its own outstanding sampling or elicitation
-  request, so the error envelope read as a second, conflicting answer to it;
-  the envelope now carries `null`, matching the reasoning that already gave
-  the response-path 404 an empty body. Requests and notifications are
-  unaffected.
+- **BREAKING (wire):** a rejection now echoes an `id` only when the inbound
+  message is a JSON-RPC **request**. Every other message kind — a response, a
+  notification, or a body the server cannot classify — gets an envelope with
+  `"id": null`, or, where the rejection carries no envelope at all, an empty
+  body. That id was minted by the *server* for its own outstanding sampling or
+  elicitation request, so echoing it read as a second, conflicting answer to a
+  call the client was still waiting on.
 
-  Two rejection paths still echo the raw body id, deliberately left outside
-  this change's scope: `Wymcp.Plugs.Auth`'s 401, and
-  `Wymcp.Plugs.Session`'s `MCP-Protocol-Version` *mismatch* 400 (reachable
-  on the response path). Both remain open.
+  The rule reaches every site that can put an id into a rejection: the shared
+  sender behind the three wire checks and `Wymcp.Plugs.Session`'s three 400s,
+  `Wymcp.Plugs.Session`'s session-terminated 404, and `Wymcp.Plugs.Validate`'s
+  schema 400. There are no documented exceptions.
+
+  What changes for a client: a 401, a 400, or a 404 answering a malformed or
+  non-request body now carries `null` where it previously carried the body's
+  id. A well-formed request is unaffected, and so is a malformed one that
+  `Wymcp.Plugs.Classify` still recognises as a request — a binary `method`
+  beside an `id` — which keeps its id through schema validation and stays
+  correlatable. A body whose `method` is absent or not a string classifies
+  `:unknown` and does lose its id, even though a missing `result`/`error`
+  would have ruled out its being a response.
+
+  Observability only partly compensates. `Wymcp.Plugs.Auth`'s 401 and
+  `Wymcp.Plugs.Session`'s session-terminated 404 emit telemetry and a Logger
+  line whose `request_id` metadata is read straight from the body, so there
+  the id the client sent survives the change. The three
+  `Wymcp.Plugs.Session` 400s and `Wymcp.Plugs.SingletonHeaders` emit
+  neither, so at those sites the id the client sent is now on no channel at
+  all; `Wymcp.Plugs.Validate` is the exception among the silent ones, still
+  echoing the whole body under `data.original_request`.
 
 ## [0.9.0]
 

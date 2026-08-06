@@ -40,6 +40,7 @@ defmodule Wymcp.Plugs.AuthTest do
     conn(:post, "/")
     |> put_req_header("content-type", "application/json")
     |> Map.put(:body_params, body)
+    |> assign(:wymcp_message_type, :request)
     |> assign(:wymcp, Map.merge(%{auth: auth_module}, extra_config))
   end
 
@@ -52,10 +53,12 @@ defmodule Wymcp.Plugs.AuthTest do
     end
 
     @tag doc: """
-         Pins the JSON-RPC error contract: code -32600, the rejection
-         message echoed under `data.error`, and the request id preserved
-         so clients can correlate. A failure here breaks every existing
-         Wymcp client that surfaces auth errors to the user.
+         Pins the JSON-RPC error contract: code -32600, the rejection message
+         echoed under `data.error`, and — because this fixture builds a
+         *request* — the id preserved so clients can correlate. The id is not
+         unconditional: Wymcp.Response.rejection_id/1 gives nil on every other
+         message kind, which the two tests below pin. A failure here breaks
+         every existing Wymcp client that surfaces auth errors to the user.
          """
     test "JSON-RPC body carries -32600 and the rejection message" do
       conn = build_conn(RejectingAuth) |> Auth.call([])
@@ -64,6 +67,46 @@ defmodule Wymcp.Plugs.AuthTest do
       assert body["id"] == 42
       assert body["error"]["code"] == -32600
       assert body["error"]["data"]["error"] == "Invalid token"
+    end
+
+    @tag doc: """
+         Spec D1 at the 401. A client answering a server-initiated sampling
+         call, rejected by auth, must not get that call's id back inside an
+         error envelope — it would read as a second answer to a request the
+         client is still waiting on. A failure means Plugs.Auth reached back
+         into the body for its id; keep request_field/2 for telemetry, where
+         the id the client actually sent is the right observability value.
+         """
+    test "a response message's 401 carries a null id" do
+      conn =
+        conn(:post, "/")
+        |> put_req_header("content-type", "application/json")
+        |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 42, "result" => %{}})
+        |> assign(:wymcp_message_type, :response)
+        |> assign(:wymcp, %{auth: RejectingAuth})
+        |> Auth.call([])
+
+      assert conn.status == 401
+      assert JSON.decode!(conn.resp_body)["id"] == nil
+    end
+
+    @tag doc: """
+         The same rule on an unclassifiable body — a truncated client answer,
+         which Wymcp.Plugs.Classify tags :unknown. This is the class the
+         inverted rule closed; under the old "everything except :response"
+         wording this 401 echoed the server-minted id.
+         """
+    test "an unclassifiable body's 401 carries a null id" do
+      conn =
+        conn(:post, "/")
+        |> put_req_header("content-type", "application/json")
+        |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 42})
+        |> assign(:wymcp_message_type, :unknown)
+        |> assign(:wymcp, %{auth: RejectingAuth})
+        |> Auth.call([])
+
+      assert conn.status == 401
+      assert JSON.decode!(conn.resp_body)["id"] == nil
     end
 
     @tag doc: """

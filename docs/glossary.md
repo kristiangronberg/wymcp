@@ -103,6 +103,10 @@ wire check sends one, and so do `Wymcp.Plugs.Session` and
 `Wymcp.Plugs.Validate`; a tool-level failure is not one — it returns an
 `isError` result in the tool dialect.
 
+**rejection id**
+`Wymcp.Response.rejection_id/1`
+_Avoid_: raw body id, request_id (for this concept)
+
 **reserved name**
 `Wymcp.Help.uses_reserved_name?/1`
 

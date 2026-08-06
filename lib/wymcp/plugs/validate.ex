@@ -27,9 +27,8 @@ defmodule Wymcp.Plugs.Validate do
         conn
 
       {:error, reason} ->
-        request_id = request["id"]
         data = %{original_request: request, error: reason}
-        response = JsonRpc.error_response(:invalid_request, request_id, data)
+        response = JsonRpc.error_response(:invalid_request, rejection_id(conn), data)
 
         conn
         |> put_status(400)

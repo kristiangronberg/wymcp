@@ -1734,13 +1734,21 @@ defmodule Wymcp.RouterTest do
 
   describe "singleton-header check" do
     @tag doc: """
-         Wire change 1: before the check existed, initialize carrying a
+         Before the singleton-header check existed, initialize carrying a
          duplicated MCP-Protocol-Version simply succeeded — nothing read the
          header's cardinality on that path. Initialize is session-exempt, so
          Plugs.Session returned before reading it, and Methods.Initialize
          negotiates from params["protocolVersion"], never from the header.
          This is the first request every client sends, so a regression here is
          maximally visible.
+
+         It also carries a second, less obvious job: `resp["id"] == 0` below
+         is the router-driven assertion that pins Plugs.Classify BEFORE
+         Plugs.SingletonHeaders. Response.rejection_id/1 reads the assign
+         Classify writes, so under that reorder the assign is nil, the rule's
+         catch-all answers nil, and this assertion goes red. The null-id
+         siblings further down cannot catch it — nil is what they expect
+         either way. Do not delete this as duplicate coverage.
          """
     test "initialize with a duplicated MCP-Protocol-Version answers 400" do
       opts = Wymcp.Router.init(tools: [TestTool])
@@ -1772,7 +1780,7 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-         Wire change 3, the forced one. Plugs.Session gates its
+         The forced wire change. Plugs.Session gates its
          MCP-Protocol-Version read on
          ProtocolVersion.supports_protocol_version_header?/1, so on a
          2025-03-26 session the header was never read and a duplicate never
@@ -1819,7 +1827,7 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-         Wire change 2: GET and DELETE never read MCP-Protocol-Version at all
+         GET and DELETE never read MCP-Protocol-Version at all
          before the check existed — a duplicate reached the routes' own
          missing-session-header 400 with the wrong message, or (with a live
          session) succeeded outright. Discriminating on the message rather than
@@ -1859,12 +1867,13 @@ defmodule Wymcp.RouterTest do
     end
 
     @tag doc: """
-         Wire change 4. A JSON-RPC response message's id belongs to a request
+         A JSON-RPC response message's id belongs to a request
          the *server* sent; the missing-session-header 400 used to echo it,
          handing a strict client a second answer to its own outstanding
-         sampling/elicitation call. The envelope now carries null. The 404
-         branch already special-cased :response with an empty body — this
-         closes the same hole on the 400 branch.
+         sampling/elicitation call. The envelope now carries null. Both this
+         400 and the session-terminated 404 reach that answer the same way —
+         through Wymcp.Response.rejection_id/1 — rather than either branch
+         special-casing :response, which is how the 404 alone used to do it.
          """
     test "a response message rejected for a missing session header carries a null id" do
       opts = Wymcp.Router.init(tools: [TestTool])
@@ -1884,14 +1893,19 @@ defmodule Wymcp.RouterTest do
     @tag doc: """
          The same null-id rule on the *duplicated*-header rejection, driven
          end-to-end through the real router rather than a hand-built conn.
-         This is the only test that pins the pipeline ORDER the rule depends
-         on: Response.rejection_id/1 reads the :wymcp_message_type assign that
-         Plugs.Classify writes, so Plugs.SingletonHeaders must sit after
-         Plugs.Classify. Move the check earlier — a natural-looking edit,
-         since cardinality is a wire fact — and the assign is nil, the
-         response message is misread as a request, and the server-minted id is
-         echoed again. singleton_headers_test.exs cannot catch that: it sets
-         the assign by hand.
+
+         Note what this test does NOT pin, because inverting the rule moved
+         it: Response.rejection_id/1 reads the :wymcp_message_type assign that
+         Plugs.Classify writes, and a nil assign now falls to the catch-all
+         and yields nil — which is exactly what this test asserts. So moving
+         Plugs.SingletonHeaders ahead of Plugs.Classify would leave this test
+         green. Under the old rule a nil assign returned the body id, and it
+         did catch that reorder.
+
+         The order is pinned instead by the keeps-its-id assertions, which
+         only a *request* body can make: "initialize with a duplicated
+         MCP-Protocol-Version answers 400" above (resp["id"] == 0) is the
+         router-driven one. Do not delete that as redundant coverage.
          """
     test "a response message rejected for a duplicated session header carries a null id" do
       opts = Wymcp.Router.init(tools: [TestTool])
@@ -1908,6 +1922,96 @@ defmodule Wymcp.RouterTest do
       resp = JSON.decode!(conn.resp_body)
       assert resp["id"] == nil
       assert resp["error"]["data"]["error"] =~ "Duplicated Mcp-Session-Id"
+    end
+
+    @tag doc: """
+         The `:unknown` half of the duplicated-header branch, and the site
+         spec.md names as where the closed bug was probe-verified. Its
+         `:response` sibling directly above gave a null id under the old rule
+         too, so that test guards nothing this topic changed; only a truncated
+         answer — `{"jsonrpc":"2.0","id":42}`, which Wymcp.Plugs.Classify tags
+         :unknown — distinguishes the two rules. Driven through the real router
+         for the same reason the sibling is: the plug-level file sets the
+         message type by hand and so cannot catch a pipeline reorder that
+         leaves the assign nil.
+         """
+    test "a truncated answer rejected for a duplicated session header carries a null id" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:post, "/", JSON.encode!(%{"jsonrpc" => "2.0", "id" => 42}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", "abc")
+        |> prepend_req_headers([{"mcp-session-id", "abc"}])
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      resp = JSON.decode!(conn.resp_body)
+      assert resp["id"] == nil
+      assert resp["error"]["data"]["error"] =~ "Duplicated Mcp-Session-Id"
+    end
+
+    @tag doc: """
+         Spec D6's router-driven leg, and the composition nothing else covers:
+         a real truncated client answer, tagged by Wymcp.Plugs.Classify rather
+         than by a hand-written assign. `{"jsonrpc":"2.0","id":42}` classifies
+         :unknown — indistinguishable from a request by construction — so its
+         id must not come back. Every plug test sets the message type itself;
+         only a router-driven test proves Classify actually produces the tag
+         the rule reads.
+         """
+    test "a truncated answer rejected for a missing session header carries a null id" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:post, "/", JSON.encode!(%{"jsonrpc" => "2.0", "id" => 42}))
+        |> put_req_header("content-type", "application/json")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      resp = JSON.decode!(conn.resp_body)
+      assert resp["id"] == nil
+      assert resp["error"]["data"]["error"] =~ "Missing Mcp-Session-Id"
+    end
+
+    @tag doc: """
+         The same truncated answer reaching Wymcp.Plugs.Validate: it holds a
+         live session, so it passes the wire checks and Wymcp.Plugs.Session and
+         is refused by schema validation instead. This is the path spec D5
+         describes end to end — the site that was the last raw-id echo.
+         """
+    test "a truncated answer on a live session is refused by Validate with a null id" do
+      session_id = initialize()
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:post, "/", JSON.encode!(%{"jsonrpc" => "2.0", "id" => 42}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["id"] == nil
+    end
+
+    @tag doc: """
+         The same body meeting a dead session: spec D2's 404 branch, driven
+         end-to-end. An empty body is the whole signal — a client receiving 404
+         must start a new session, so there is no next action a diagnostic
+         string would add.
+         """
+    test "a truncated answer on a dead session answers an empty 404" do
+      opts = Wymcp.Router.init(tools: [TestTool])
+
+      conn =
+        conn(:post, "/", JSON.encode!(%{"jsonrpc" => "2.0", "id" => 42}))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", "no-such-session")
+        |> Wymcp.Router.call(opts)
+
+      assert conn.status == 404
+      assert conn.resp_body == ""
     end
   end
 

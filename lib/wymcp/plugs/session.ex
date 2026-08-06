@@ -37,12 +37,11 @@ defmodule Wymcp.Plugs.Session do
   `CaseClauseError` therefore means a route was wired without the check, not
   that a client sent something exotic.
 
-  The missing-header and lifecycle 400s below carry the id
-  `Wymcp.Response.rejection_id/1` gives: the body's, except on a response
-  message, where it is `nil` — the same reasoning that makes the
-  response-message 404 an empty body. `protocol_version_mismatch/1` is the
-  one exception: it still echoes the raw body id even on a response message,
-  a known gap left outside this change's scope and flagged at its call site.
+  Every rejection below carries the id `Wymcp.Response.rejection_id/1` gives:
+  the body's on a request, `nil` on every other message kind. That holds for
+  the three 400s, which route through `Wymcp.Response.send_rejection/4`, and
+  for the 404, which assembles its own envelope but branches on the same rule
+  — see "Wire shape for session-not-found" below. There are no exceptions.
 
   ### Flow
 
@@ -51,12 +50,18 @@ defmodule Wymcp.Plugs.Session do
       A[Incoming POST] --> B{Mcp-Session-Id<br/>required?}
       B -->|"no — initialize / ping"| Pass([pass through<br/>to next plug])
       B -->|yes| C{Header present?}
-      C -->|no| R400([HTTP 400<br/>JSON-RPC -32600<br/>invalid_request])
+      C -->|no| R400Missing([HTTP 400<br/>JSON-RPC -32600<br/>missing header])
       C -->|yes| D{Session.lookup}
-      D -->|"{:ok, pid}"| E[assign pid<br/>+ touch<br/>+ check version<br/>+ lifecycle gate] --> Pass
-      D -->|":not_found"| F{Message kind?}
-      F -->|"request<br/>(has id)"| R404Body([HTTP 404<br/>JSON-RPC -32001<br/>'Session terminated'<br/>no data field])
-      F -->|notification or<br/>response message| R404Empty([HTTP 404<br/>empty body])
+      D -->|":not_found"| F{rejection_id?}
+      F -->|"an id<br/>(a request)"| R404Body([HTTP 404<br/>JSON-RPC -32001<br/>'Session terminated'<br/>no data field])
+      F -->|"nil<br/>(every other kind)"| R404Empty([HTTP 404<br/>empty body])
+      D -->|"{:ok, pid}"| E[assign pid<br/>+ touch] --> G{Version header<br/>matches?}
+      G -->|"no"| R400Version([HTTP 400<br/>JSON-RPC -32600<br/>version mismatch])
+      G -->|"yes, absent,<br/>or not enforced"| K{Response<br/>message?}
+      K -->|"yes"| Pass
+      K -->|"no — every<br/>other kind"| H{Lifecycle gate}
+      H -->|"exempt method<br/>or session ready"| Pass
+      H -->|"otherwise"| R400Lifecycle([HTTP 400<br/>JSON-RPC -32600<br/>session not ready])
   ```
 
   ### Exemptions
@@ -69,32 +74,40 @@ defmodule Wymcp.Plugs.Session do
       session is still in `:initializing`. This is necessary because
       clients (notably `mcp-remote`) send `tools/list` and
       `tools/call` concurrently with `notifications/initialized`.
+    * A **response message** skips the lifecycle gate entirely, whatever its
+      method: `call/2` routes it to `resolve_session_for_response/1`, which
+      checks the protocol version and stops. Unlike the two lists above this is
+      not a method exemption — `session_not_ready/1` is simply unreachable on
+      that path.
 
   ### Wire shape for session-not-found
 
-  The 404 body branches on JSON-RPC message kind, since JSON-RPC 2.0
-  forbids responding to notifications and to responses:
+  The 404 body branches on the rejection-id rule
+  (`Wymcp.Response.rejection_id/1`): it carries an envelope exactly when the
+  rule yields an id, which is exactly when the inbound message is a request.
 
-    * **Request** (`id` present, `wymcp_message_type` not `:response`)
-      — body is `{"jsonrpc":"2.0","id":<request-id>,"error":{"code":
-      -32001,"message":"Session terminated"}}`, matching the
-      TypeScript SDK exactly: see
-      `modelcontextprotocol/typescript-sdk`,
-      `packages/server/src/server/streamableHttp.ts`, where the SDK
-      throws `new McpError(-32001, "Session terminated")` with no
-      `data` field. Matching that wire shape exactly maximises the
-      chance compliant clients (which MUST re-initialise on this
-      response) recognise it.
+    * **Request** — body is `{"jsonrpc":"2.0","id":<request-id>,"error":
+      {"code":-32001,"message":"Session terminated"}}`, matching the
+      TypeScript SDK exactly: see `modelcontextprotocol/typescript-sdk`,
+      `packages/server/src/server/streamableHttp.ts`, where the SDK throws
+      `new McpError(-32001, "Session terminated")` with no `data` field.
+      Matching that wire shape exactly maximises the chance compliant clients
+      (which MUST re-initialise on this response) recognise it.
 
-    * **Notification** (no `id`) — HTTP 404 with empty body. JSON-RPC
-      2.0 forbids responding to notifications, so we do not emit an
-      envelope. The 404 status alone carries the spec-required
-      signal.
+    * **Every other message kind** — a notification, a response message, or a
+      body `Wymcp.Plugs.Classify` could not tag — HTTP 404 with empty body.
+      The rule gives no id, and an id-bearing reply is what JSON-RPC forbids
+      here: a response message's `id` belongs to a request the server itself
+      sent, so echoing it would be a second answer to a call the client is
+      still waiting on.
 
-    * **Response message** (`wymcp_message_type == :response`) — HTTP
-      404 with empty body. A JSON-RPC response carries an `id` of a
-      server-initiated request the server already sent; replying to
-      it with a JSON-RPC error would itself be a protocol violation.
+  An id-less envelope would *not* be forbidden — the MCP spec names that shape
+  for rejected input — so the empty body is a choice, not a constraint. The
+  reason it stays empty is that the status is the whole signal: a client
+  receiving 404 must start a new session, so there is exactly one next action
+  and no diagnostic string would add to it. That is also why the argument which
+  decided the 400s does not transfer — a 400 names something the client author
+  must fix, and naming it is the point.
   """
 
   import Plug.Conn
@@ -198,22 +211,18 @@ defmodule Wymcp.Plugs.Session do
   end
 
   defp missing_session_header(conn) do
-    send_error(
+    send_rejection(
       conn,
       400,
-      rejection_id(conn),
       "Missing Mcp-Session-Id header. Initialize first."
     )
   end
 
   defp session_terminated(conn, session_id) do
-    request_id = conn.body_params["id"]
-    method = conn.body_params["method"]
-
     Wymcp.Telemetry.emit(:session, :not_found, %{}, %{
       session_id: session_id,
-      request_id: request_id,
-      method: method
+      request_id: conn.body_params["id"],
+      method: conn.body_params["method"]
     })
 
     require Logger
@@ -222,24 +231,23 @@ defmodule Wymcp.Plugs.Session do
       "Session terminated (id: #{session_id}). Returning 404 to prompt client re-initialise."
     )
 
-    if conn.assigns[:wymcp_message_type] == :response or is_nil(request_id) do
-      conn
-      |> send_resp(404, "")
-      |> halt()
-    else
-      response = JsonRpc.error_response(:session_not_found, request_id)
+    case rejection_id(conn) do
+      nil ->
+        conn
+        |> send_resp(404, "")
+        |> halt()
 
-      conn
-      |> put_status(404)
-      |> send_json(response)
+      id ->
+        conn
+        |> put_status(404)
+        |> send_json(JsonRpc.error_response(:session_not_found, id))
     end
   end
 
   defp session_not_ready(conn) do
-    send_error(
+    send_rejection(
       conn,
       400,
-      rejection_id(conn),
       "Session not yet initialized. Send notifications/initialized first."
     )
   end
@@ -269,15 +277,10 @@ defmodule Wymcp.Plugs.Session do
     end
   end
 
-  # The id stays the raw body id rather than rejection_id/1: this branch IS
-  # reachable on the :response path, and narrowing it there would be a fifth
-  # wire change, outside this topic's four. Filed thought, not an oversight —
-  # see the topic's plan.md, Assumptions.
   defp protocol_version_mismatch(conn) do
-    send_error(
+    send_rejection(
       conn,
       400,
-      conn.body_params["id"],
       "Incorrect MCP-Protocol-Version header. Expected the version negotiated during initialize."
     )
   end

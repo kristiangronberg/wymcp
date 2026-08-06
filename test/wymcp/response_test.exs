@@ -60,9 +60,13 @@ defmodule Wymcp.ResponseTest do
     end
   end
 
-  describe "send_error/5" do
+  describe "send_rejection/4" do
     test "assembles the JSON-RPC dialect's -32600 envelope and halts" do
-      conn = Response.send_error(conn(:post, "/"), 400, 7, "Nope")
+      conn =
+        conn(:post, "/")
+        |> Map.put(:body_params, %{"id" => 7, "method" => "tools/list"})
+        |> assign(:wymcp_message_type, :request)
+        |> Response.send_rejection(400, "Nope")
 
       assert conn.halted
       assert conn.status == 400
@@ -78,8 +82,26 @@ defmodule Wymcp.ResponseTest do
              }
     end
 
-    test "sends the plain-JSON dialect's flat object and ignores the request id" do
-      conn = Response.send_error(conn(:get, "/"), 401, 7, "Nope", :plain_json)
+    @tag doc: """
+         The sender derives the id itself (spec D4): no caller passes one, so
+         no caller can choose otherwise. A failure with the id present means
+         the derivation was moved back out to the call sites — the bug this
+         topic exists to make unrepeatable.
+         """
+    test "derives a null id from a non-request message" do
+      conn =
+        conn(:post, "/")
+        |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 7, "result" => %{}})
+        |> assign(:wymcp_message_type, :response)
+        |> Response.send_rejection(400, "Nope")
+
+      assert JSON.decode!(conn.resp_body)["id"] == nil
+    end
+
+    test "sends the plain-JSON dialect's flat object, which carries no id" do
+      conn =
+        conn(:get, "/")
+        |> Response.send_rejection(401, "Nope", :plain_json)
 
       assert conn.halted
       assert conn.status == 401
@@ -89,13 +111,14 @@ defmodule Wymcp.ResponseTest do
 
   describe "rejection_id/1" do
     @tag doc: """
-         The id rule for a rejection envelope (spec D5). A JSON-RPC response
-         message carries an id the *server* minted for its own outstanding
-         request; echoing it back inside an error envelope offers a strict
-         client a second, conflicting answer to that request. A failure here
-         means the :response guard was lost and the 0.9.0 id collision is back.
+         The rule's two poles. A JSON-RPC response message carries an id the
+         *server* minted for its own outstanding request, and echoing it back
+         inside an error envelope offers a strict client a second, conflicting
+         answer to that request; a genuine request's id is the one that must
+         survive. A failure here means the positive :request clause was lost
+         or widened and the 0.9.0 id collision is back.
          """
-    test "answers nil for a response message and the body id otherwise" do
+    test "answers the body id for a request and nil for a response message" do
       response =
         conn(:post, "/")
         |> Map.put(:body_params, %{"id" => 42, "result" => %{}})
@@ -111,13 +134,39 @@ defmodule Wymcp.ResponseTest do
     end
 
     @tag doc: """
-         Runs on the GET/DELETE routes, where Plug.Parsers never ran and
-         conn.body_params is a %Plug.Conn.Unfetched{} whose Access callbacks
-         raise. A failure here means the implementation reached for
-         conn.body_params["id"] instead of Map.get/3.
+         conn.body_params is a %Plug.Conn.Unfetched{} wherever Plug.Parsers
+         never ran, and its Access callbacks raise. The :request assign below
+         is load-bearing: inverting the rule left the body read reachable only
+         from that clause, so an unassigned conn exits through the catch-all
+         and never touches Map.get/3 — which is what this test exists to pin.
+         A failure here means the implementation reached for
+         conn.body_params["id"] instead. The two forms genuinely discriminate:
+         on that struct Access raises ArgumentError where Map.get/3 answers
+         nil.
          """
     test "answers nil on a conn whose body was never parsed" do
+      unparsed = conn(:get, "/") |> assign(:wymcp_message_type, :request)
+
+      assert Response.rejection_id(unparsed) == nil
       assert Response.rejection_id(conn(:get, "/")) == nil
+    end
+
+    @tag doc: """
+         The inverted rule's whole point (spec D1). Wymcp.Plugs.Classify tags
+         :unknown when it cannot tell a request from a response — a truncated
+         client answer, `{"jsonrpc":"2.0","id":42}`, lands here. That id may
+         have been minted by the server, so it must not come back. A failure
+         means the rule regressed to "everything except :response", which
+         leaks the server-minted id on exactly the bodies where request and
+         response are indistinguishable by construction.
+         """
+    test "answers nil for an unclassifiable body carrying an id" do
+      unknown =
+        conn(:post, "/")
+        |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 42})
+        |> assign(:wymcp_message_type, :unknown)
+
+      assert Response.rejection_id(unknown) == nil
     end
   end
 end

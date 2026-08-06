@@ -78,6 +78,7 @@ defmodule Wymcp.Plugs.SessionTest do
       conn(:post, "/")
       |> put_req_header("mcp-session-id", "bogus")
       |> Map.put(:body_params, %{"method" => "tools/list", "id" => 1})
+      |> assign(:wymcp_message_type, :request)
       |> SessionPlug.call(SessionPlug.init([]))
 
     assert conn.status == 404
@@ -94,11 +95,11 @@ defmodule Wymcp.Plugs.SessionTest do
   end
 
   @tag doc: """
-       JSON-RPC 2.0 forbids responding to notifications. The MCP spec
-       still requires HTTP 404 for the stale-session signal, so the
-       reconciliation is: 404 status + empty body + no JSON-RPC
-       envelope. Returning an envelope with id:null would itself be a
-       JSON-RPC violation.
+       A notification has no id by construction, so the rejection-id rule
+       gives none and the 404 carries no envelope. The MCP spec still requires
+       the 404 status for the stale-session signal, so the reconciliation is
+       404 + empty body. An id-less envelope would be spec-legal here; empty
+       is the choice, because the status already names the one next action.
        """
   test "responds 404 with empty body for stale-session notification" do
     conn =
@@ -114,11 +115,10 @@ defmodule Wymcp.Plugs.SessionTest do
   end
 
   @tag doc: """
-       Response messages (client-to-server answers to server-initiated
-       requests) carry an `id` referring to a request the server already
-       sent. Replying to a response with another JSON-RPC error would
-       itself be a JSON-RPC violation — you do not respond to responses.
-       HTTP 404 alone is the right signal, with empty body.
+       A response message's `id` refers to a request the server already sent,
+       so the rejection-id rule gives nil and the 404 carries no envelope.
+       Echoing that id would be the actual JSON-RPC violation — a second
+       answer to an outstanding request. HTTP 404 alone is the right signal.
        """
   test "responds 404 with empty body for stale-session response message" do
     conn =
@@ -136,6 +136,48 @@ defmodule Wymcp.Plugs.SessionTest do
     assert conn.halted
     assert conn.resp_body == ""
     refute Map.has_key?(conn.assigns, :wymcp_session_pid)
+  end
+
+  @tag doc: """
+       Spec D2 — the hole the topic closes. A truncated client answer,
+       `{"jsonrpc":"2.0","id":42}`, tags :unknown, so under the old branch
+       condition (`== :response or is_nil(request_id)`) it met a dead session
+       and got the server-minted id back inside a -32001 envelope. The 404 now
+       carries an envelope exactly when the rule yields an id. A failure with a
+       JSON body here means the branch condition was rewritten back to reading
+       the body's id directly.
+       """
+  test "responds 404 with empty body for a stale-session unclassifiable message" do
+    conn =
+      conn(:post, "/")
+      |> put_req_header("mcp-session-id", "bogus")
+      |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 42})
+      |> assign(:wymcp_message_type, :unknown)
+      |> SessionPlug.call(SessionPlug.init([]))
+
+    assert conn.status == 404
+    assert conn.halted
+    assert conn.resp_body == ""
+  end
+
+  @tag doc: """
+       The other side of D2: a real request meeting a dead session still gets
+       the SDK-matching envelope with its id. Pinned beside the empty-body case
+       because the two together are the branch — a change that empties both is
+       as wrong as one that fills both.
+       """
+  test "a stale-session request keeps its id in the -32001 envelope" do
+    conn =
+      conn(:post, "/")
+      |> put_req_header("mcp-session-id", "bogus")
+      |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 7, "method" => "tools/list"})
+      |> assign(:wymcp_message_type, :request)
+      |> SessionPlug.call(SessionPlug.init([]))
+
+    assert conn.status == 404
+    body = JSON.decode!(conn.resp_body)
+    assert body["id"] == 7
+    assert body["error"]["code"] == -32001
   end
 
   @tag doc: """
@@ -158,12 +200,13 @@ defmodule Wymcp.Plugs.SessionTest do
   end
 
   @tag doc: """
-       The lifecycle gate's 400. resources/list is neither session-exempt
-       nor lifecycle-exempt, so it is refused while the session is still
-       :initializing. Asserting the echoed id is what pins send_error/5's
-       argument order at this call site: the branch has no other coverage
-       anywhere in the suite, so a swapped id/message or a mistyped status
-       would otherwise ship green.
+       The lifecycle gate's 400. resources/list is neither session-exempt nor
+       lifecycle-exempt, so it is refused while the session is still
+       :initializing. Asserting the echoed id pins send_rejection/4's
+       derivation at this call site: the branch has no other coverage anywhere
+       in the suite, so a mistyped status or a lost derivation would otherwise
+       ship green. The explicit :request assign is load-bearing — without it
+       the fixture rides the rule's catch-all and pins nothing.
        """
   test "rejects a non-exempt method with 400 while the session is still initializing" do
     {:ok, _pid, session_id} = Session.start_session(Testing.build_session_opts())
@@ -173,6 +216,7 @@ defmodule Wymcp.Plugs.SessionTest do
       |> put_req_header("mcp-session-id", session_id)
       |> put_req_header("mcp-protocol-version", "2025-11-25")
       |> Map.put(:body_params, %{"method" => "resources/list", "id" => 5})
+      |> assign(:wymcp_message_type, :request)
       |> SessionPlug.call(SessionPlug.init([]))
 
     assert conn.halted
@@ -296,6 +340,52 @@ defmodule Wymcp.Plugs.SessionTest do
       body = JSON.decode!(conn.resp_body)
       assert body["error"]["code"] == -32600
       assert body["error"]["data"]["error"] =~ "MCP-Protocol-Version"
+    end
+
+    @tag doc: """
+         Spec D4 reaching the mismatch 400: protocol_version_mismatch/1 IS
+         reachable on the response path (resolve_session_for_response/1 →
+         check_protocol_version/2), so a client answering a server-initiated
+         call while sending a stale version header used to get the server's own
+         id back. The two spec rules compose here: 400 for the bad header
+         (spec.md's G2), id-less body for the message kind (D1, delivered by
+         the sender's arity drop). A failure means this site was left off the
+         rule again — it has been the last holdout twice.
+         """
+    test "a response message's mismatch 400 carries a null id" do
+      {:ok, _pid, session_id} = start_ready_session()
+
+      conn =
+        conn(:post, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2024-01-01")
+        |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 42, "result" => %{}})
+        |> assign(:wymcp_message_type, :response)
+        |> SessionPlug.call(SessionPlug.init([]))
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["id"] == nil
+    end
+
+    @tag doc: """
+         The request path keeps its id — the branch survey C1 found already
+         tested twice (session_test.exs and the router-driven describe below),
+         but where neither test asserted body["id"]. This adds the id
+         assertion to a tested branch; it is not first coverage of the branch.
+         """
+    test "a request's mismatch 400 keeps its id" do
+      {:ok, _pid, session_id} = start_ready_session()
+
+      conn =
+        conn(:post, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2024-01-01")
+        |> Map.put(:body_params, %{"jsonrpc" => "2.0", "id" => 7, "method" => "tools/list"})
+        |> assign(:wymcp_message_type, :request)
+        |> SessionPlug.call(SessionPlug.init([]))
+
+      assert conn.status == 400
+      assert JSON.decode!(conn.resp_body)["id"] == 7
     end
 
     test "passes request with correct MCP-Protocol-Version header" do

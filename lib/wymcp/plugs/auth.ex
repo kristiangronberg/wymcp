@@ -36,6 +36,13 @@ defmodule Wymcp.Plugs.Auth do
   request body, so both are `nil` off POST. Both branches also emit a
   structured `Logger` line with the same metadata so operators without a
   telemetry handler still get attribution.
+
+  The telemetry `request_id` is read straight from the body and deliberately
+  differs from the id the 401's envelope carries: the wire answer applies
+  `Wymcp.Response.rejection_id/1`, which is `nil` on every non-request message,
+  while an operator diagnosing a rejection wants the id the client actually
+  sent. That is why `request_field/2` survives at the four observability sites
+  and nowhere else.
   """
 
   require Logger
@@ -122,7 +129,7 @@ defmodule Wymcp.Plugs.Auth do
   defp send_unauthorized(conn, reason, dialect) do
     conn
     |> put_resp_header("www-authenticate", www_authenticate_value(conn))
-    |> send_error(401, request_field(conn, "id"), reason, dialect)
+    |> send_rejection(401, reason, dialect)
   end
 
   # Bare `Bearer` unless the consumer configured auth-params via the router's

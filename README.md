@@ -407,11 +407,13 @@ the pipeline. Two primitives, one per error dialect: JSON-RPC envelopes — tool
 results, JSON-RPC errors, POST auth rejections — go through `send_json/2`,
 which preserves any previously-set HTTP status code; the flat plain-JSON errors
 of the GET/DELETE routes go through `send_plain_error/3`. Above them sits
-`send_error/5`, the shared rejection sender that takes the dialect as a
+`send_rejection/4`, the shared rejection sender that takes the dialect as a
 parameter, so a wire check running on both POST and GET/DELETE states its
-status and message once instead of carrying its own dialect switch. Every
-sender halts the connection so downstream plugs do not execute after a
-response is sent.
+status and message once instead of carrying its own dialect switch.
+It derives the envelope's id from `rejection_id/1` — the rule that a rejection
+echoes an id only when the inbound message is a JSON-RPC request — rather than
+taking one from the caller. Every sender halts the connection so downstream
+plugs do not execute after a response is sent.
 
 [`Wymcp.Transport.Stream`](lib/wymcp/transport/stream.ex) is the chunked SSE
 connection for one session, run as a receive loop by the GET request process
