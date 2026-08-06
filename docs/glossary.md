@@ -30,6 +30,18 @@ plus the `WWW-Authenticate` challenge on failure. Implemented by
 `Wymcp.Plugs.Auth`; distinct from the Auth behaviour — the consumer
 contract it calls.
 
+**check-exempt verb**
+An HTTP verb whose route `Wymcp.Router` deliberately serves without one
+*named* wire check — a CORS preflight is exempt from the auth check, because
+it carries no `Authorization` header, while the origin and singleton-header
+checks still run on it. The exemption is always per verb *and* check, never
+blanket. There are none: the record is `Wymcp.WireCheckInvariantTest`'s
+`@check_exempt_verbs`, empty, each future entry naming its check and the
+reason. Every other verb–check pair must answer either that check's rejection
+or nothing at all; an exempt pair must answer neither, so an entry that stops
+being true fails.
+_Avoid_: public verb, public route
+
 **consumer-authored text**
 Defined at its prose home: the README section "Consumer-authored text".
 
