@@ -96,6 +96,13 @@ directly on a plain push, the session on a server-request round trip's
 push leg.
 _Avoid_: push reply, push result
 
+**rejection**
+An HTTP answer that refuses an inbound message instead of processing it,
+carrying a status and a diagnostic message in the route's error dialect. A
+wire check sends one, and so do `Wymcp.Plugs.Session` and
+`Wymcp.Plugs.Validate`; a tool-level failure is not one — it returns an
+`isError` result in the tool dialect.
+
 **reserved name**
 `Wymcp.Help.uses_reserved_name?/1`
 
@@ -281,6 +288,8 @@ define sessions:
 - **name ×many** — tool name, action name, serverInfo.name, property name.
 - **description ×4** — tool-level `description()` callback vs action-schema `:description` vs the JSON Schema property `"description"` vs `serverInfo.description`.
 - **run ×3** — `Methods.*.run`, generated `Tool.run/2`, `run_action/3`.
+- **request_id ×5** — the id a rejection echoes (`Wymcp.Response`) vs the JSON-RPC envelope builders' parameter (`Wymcp.JsonRpc`) vs a telemetry/Logger metadata key vs the `%Wymcp.Context{}` field vs **the server-minted id of a server→client sampling or elicitation request** (`Wymcp.Session`, `Wymcp.Context.generate_request_id/0`). The first and last name ids minted by opposite parties, and they meet at `Wymcp.Methods.DeliverResponse`.
+- **response ×6** — the `Wymcp.Response` module vs the `:response` message kind vs the HTTP response vs `Wymcp.JsonRpc`'s response builders vs `deliver_response` vs `Wymcp.Testing`'s assertion helpers. Three of the six meet inside `Wymcp.Response.rejection_id/1`.
 - **negotiated version ≈ protocol version ≈ revision ≈ protocolVersion** — one concept, four spellings across resolver, state, prose, and wire.
 - **session assigns ≈ per-session state ≈ per-session assigns** — one concept in prose.
 - **camelCase ↔ snake_case** — wire vs Elixir spellings of the same fields (inputSchema/input_schema, serverInfo/server_info, `_meta`/meta, Mcp-Session-Id/session_id).
